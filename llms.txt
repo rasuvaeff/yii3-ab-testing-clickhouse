@@ -9,13 +9,14 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 ## Rules
 
 - Implements `Rasuvaeff\Yii3AbTesting\ExposureTracker` and `ConversionTracker`.
-- Buffers events in memory; one batched ClickHouse insert per `flush()`. Tracking never blocks the request — call `flush()` at request end (PSR-15 terminate / shutdown).
+- Buffers events in memory; `trackExposure()` / `trackConversion()` never write to the network.
+- One batched ClickHouse insert happens per `flush()`. `flush()` writes then clears the buffer; a failed write keeps the buffer.
+- `ClickHouseTrackingFlushMiddleware` is the recommended request-end integration: it flushes both trackers in `finally` and swallows/logs flush failures.
 - Built on `rasuvaeff/clickhouse-toolkit` `ClickHouseBatchWriter`; trackers take a `ClickHouseWriterInterface`.
-- `flush()` writes then clears the buffer; empty buffer writes nothing; a failed write keeps the buffer.
-- Booleans stored as `UInt8` (0/1); `environment` defaults to `''`; `ts` filled server-side by `DEFAULT now()`.
+- Booleans stored as `UInt8` (`0`/`1`); `environment` defaults to `''`; `ts` filled server-side by `DEFAULT now()`.
 - A tracker's `COLUMNS` constant must match its writer's columns and the table DDL.
 - Trackers implement `FlushableTracker` (core ^1.2); auto-flush writes the buffer once it reaches `autoFlushSize` (default 1000). A failed auto-flush never throws; events are kept (capped at 10 × autoFlushSize, oldest dropped).
-- Binds `ExposureTracker` + `ConversionTracker` in `config/di.php` (one source per key; compose multiple with the core `Composite*Tracker`). The app must register a `SimPod\ClickHouseClient\Client\ClickHouseClient`.
+- Binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` in `config/di.php`. The app must register a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`.
 - Schema ships as `migrations/*.sql`, applied by the toolkit's `ClickHouseMigrationRunner`.
 
 ## Tables
@@ -37,8 +38,8 @@ $tracker = new ClickHouseExposureTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
 );
 
-$tracker->trackExposure($assignment);   // buffered
-$tracker->flush();                       // one batched insert
+$tracker->trackExposure($assignment); // buffered
+$tracker->flush();                    // one batched insert
 ```
 
 ### ClickHouseConversionTracker
@@ -53,4 +54,14 @@ $tracker = new ClickHouseConversionTracker(
 
 $tracker->trackConversion($assignment, goal: 'purchase');
 $tracker->flush();
+```
+
+### ClickHouseTrackingFlushMiddleware
+
+```php
+use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+
+return [
+    ClickHouseTrackingFlushMiddleware::class,
+];
 ```

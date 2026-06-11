@@ -10,13 +10,13 @@ use PHPUnit\Framework\TestCase;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
+use Rasuvaeff\ClickHouseToolkit\ClickHouseDataReader;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
+use Rasuvaeff\ClickHouseToolkit\ClickHouseQueryBuilder;
 use Rasuvaeff\Yii3AbTesting\Assignment;
 use Rasuvaeff\Yii3AbTesting\AssignmentContext;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
-use SimPod\ClickHouseClient\Client\ClickHouseClient;
-use SimPod\ClickHouseClient\Format\JsonEachRow;
 
 /**
  * End-to-end test against a real ClickHouse server. Skipped unless
@@ -26,7 +26,7 @@ use SimPod\ClickHouseClient\Format\JsonEachRow;
 #[CoversNothing]
 final class ClickHouseIntegrationTest extends TestCase
 {
-    private ClickHouseClient $client;
+    private ClickHouseClientFactory $clientFactory;
 
     private static function env(string $name, string $default): string
     {
@@ -43,25 +43,30 @@ final class ClickHouseIntegrationTest extends TestCase
             $this->markTestSkipped('CLICKHOUSE_HOST is not set; skipping integration tests.');
         }
 
-        $this->client = (new ClickHouseClientFactory(new ClickHouseConfig(
+        $this->clientFactory = new ClickHouseClientFactory(new ClickHouseConfig(
             host: $host,
             port: (int) self::env('CLICKHOUSE_PORT', '8123'),
             database: self::env('CLICKHOUSE_DB', 'default'),
             username: self::env('CLICKHOUSE_USER', 'default'),
             password: self::env('CLICKHOUSE_PASSWORD', ''),
-        )))->create();
+        ));
 
+        $client = $this->clientFactory->create();
         foreach (['ab_exposures', 'ab_conversions', '_migrations'] as $table) {
-            $this->client->executeQuery('DROP TABLE IF EXISTS ' . $table);
+            $client->executeQuery('DROP TABLE IF EXISTS ' . $table);
         }
 
-        (new ClickHouseMigrationRunner($this->client, dirname(__DIR__, 2) . '/migrations'))->run();
+        (new ClickHouseMigrationRunner($client, dirname(__DIR__, 2) . '/migrations'))->run();
     }
 
     #[Test]
     public function flushesExposuresToClickHouse(): void
     {
-        $writer = new ClickHouseBatchWriter($this->client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS);
+        $writer = new ClickHouseBatchWriter(
+            $this->clientFactory->create(),
+            'ab_exposures',
+            ClickHouseExposureTracker::COLUMNS,
+        );
         $tracker = new ClickHouseExposureTracker(writer: $writer);
 
         $tracker->trackExposure(new Assignment(
@@ -79,7 +84,11 @@ final class ClickHouseIntegrationTest extends TestCase
     #[Test]
     public function flushesConversionsToClickHouse(): void
     {
-        $writer = new ClickHouseBatchWriter($this->client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS);
+        $writer = new ClickHouseBatchWriter(
+            $this->clientFactory->create(),
+            'ab_conversions',
+            ClickHouseConversionTracker::COLUMNS,
+        );
         $tracker = new ClickHouseConversionTracker(writer: $writer);
 
         $tracker->trackConversion(
@@ -94,15 +103,25 @@ final class ClickHouseIntegrationTest extends TestCase
 
     private function countRows(string $table): int
     {
-        $output = $this->client->select(sprintf('SELECT count() AS cnt FROM %s', $table), new JsonEachRow());
-
-        return (int) ($output->data[0]['cnt'] ?? 0);
+        return $this->reader(table: $table)->count();
     }
 
     private function firstGoal(): string
     {
-        $output = $this->client->select('SELECT goal FROM ab_conversions LIMIT 1', new JsonEachRow());
+        return (string) ($this->reader(table: 'ab_conversions', columns: ['goal'])->readOne()['goal'] ?? '');
+    }
 
-        return (string) ($output->data[0]['goal'] ?? '');
+    /**
+     * @param list<string> $columns
+     */
+    private function reader(string $table, array $columns = []): ClickHouseDataReader
+    {
+        return new ClickHouseDataReader(
+            client: $this->clientFactory->create(),
+            table: $table,
+            queryBuilder: ClickHouseQueryBuilder::create(allowedFields: $columns),
+            mapper: static fn(array $row): array => $row,
+            columns: $columns,
+        );
     }
 }

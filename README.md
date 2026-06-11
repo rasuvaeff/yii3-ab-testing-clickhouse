@@ -9,17 +9,16 @@
 
 ClickHouse exposure and conversion trackers for Yii3 A/B testing. Implements the
 `ExposureTracker` and `ConversionTracker` interfaces from `rasuvaeff/yii3-ab-testing`,
-buffering events in memory and writing them to ClickHouse in batches — the
-production analytics sink for aggregates, funnels and significance.
+buffering events in memory and writing them to ClickHouse in batches.
 
 > Using an AI coding assistant? [llms.txt](llms.txt) contains a compact API reference you can ingest in your prompt context.
 
 ## Requirements
 
 - PHP 8.3+
-- `rasuvaeff/yii3-ab-testing` ^1.0
-- `rasuvaeff/clickhouse-toolkit` ^1.1 (+ `simpod/clickhouse-client`)
-- a PSR-18 HTTP client (e.g. `guzzlehttp/guzzle`) for the ClickHouse connection
+- `rasuvaeff/yii3-ab-testing` ^1.2
+- `rasuvaeff/clickhouse-toolkit` ^1.1
+- a PSR-18 HTTP client (for example `guzzlehttp/guzzle`) for the ClickHouse connection
 
 ## Installation
 
@@ -27,24 +26,24 @@ production analytics sink for aggregates, funnels and significance.
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
 
-With Yii3 config-plugin this package binds `ExposureTracker` and
-`ConversionTracker` automatically — do **not** bind them from another adapter or
-the application at the same time, or `yiisoft/config` reports a `Duplicate key`
-error. To send events to several sinks, compose them with the core
-`CompositeExposureTracker` / `CompositeConversionTracker`.
+With Yii3 config-plugin this package binds `ExposureTracker`, `ConversionTracker`
+and `ClickHouseTrackingFlushMiddleware` automatically. Do not bind the tracker
+interfaces from another adapter at the same time or `yiisoft/config` reports a
+`Duplicate key` error. To send events to several sinks, compose them with the
+core `CompositeExposureTracker` / `CompositeConversionTracker`.
 
-The DI factory pulls a `SimPod\ClickHouseClient\Client\ClickHouseClient` from the
-container. Bind one in your application from the toolkit's factory:
+The DI factory pulls a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`
+from the container and uses it to build the batch writers. Bind the factory in
+your application:
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
-use SimPod\ClickHouseClient\Client\ClickHouseClient;
 
 return [
-    ClickHouseClient::class => static fn (): ClickHouseClient => (new ClickHouseClientFactory(
+    ClickHouseClientFactory::class => static fn (): ClickHouseClientFactory => new ClickHouseClientFactory(
         new ClickHouseConfig(host: getenv('CLICKHOUSE_HOST') ?: '127.0.0.1', /* ... */),
-    ))->create(),
+    ),
 ];
 ```
 
@@ -74,8 +73,8 @@ Both are `MergeTree` partitioned by `toYYYYMM(ts)`; `ts` defaults to `now()`.
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\Yii3AbTesting\AbTesting;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
+use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 
 $exposure = new ClickHouseExposureTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
@@ -94,19 +93,29 @@ $ab = new AbTesting(
 $assignment = $ab->assign(experiment: 'checkout-button', subjectId: (string) $userId);
 $ab->trackExposure($assignment);            // buffered, not sent yet
 $ab->trackConversion($assignment, goal: 'purchase');
-
-// Once per request, at the end (PSR-15 terminate / register_shutdown_function):
-$exposure->flush();
-$conversion->flush();
 ```
 
-### Flushing
+### Request-end flushing
 
-Tracking never makes a network call — `trackExposure()` / `trackConversion()` only
-append to an in-memory buffer. Call `flush()` once at the end of the request to
-write everything in one batched insert. A failed `flush()` keeps the buffer so you
-may retry. Wire `flush()` to your PSR-15 terminate handler or
-`register_shutdown_function`.
+Tracking never makes a network call on `trackExposure()` or `trackConversion()`.
+Rows are appended to an in-memory buffer and written on `flush()`. The package
+ships `ClickHouseTrackingFlushMiddleware` for the recommended request-end flush:
+
+```php
+use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+
+return [
+    ClickHouseTrackingFlushMiddleware::class,
+    // place it late in the PSR-15 pipeline
+];
+```
+
+The middleware wraps the downstream handler in `try/finally`, flushes both
+trackers after the request, and swallows/logs flush failures so analytics never
+breaks the user response.
+
+If you do not use a PSR-15 pipeline, call `flush()` yourself once at request end
+or from `register_shutdown_function()`.
 
 ## API reference
 
@@ -114,14 +123,17 @@ may retry. Wire `flush()` to your PSR-15 terminate handler or
 |---|---|
 | `ClickHouseExposureTracker` | Buffers exposures; `flush()` batch-writes to `ab_exposures` |
 | `ClickHouseConversionTracker` | Buffers conversions (with `goal`); `flush()` batch-writes to `ab_conversions` |
+| `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware that flushes both trackers safely at request end |
 
 ## Security
 
 - Connection credentials travel via the toolkit's `ClickHouseClientFactory`
   (headers / config from env), never in URLs. The toolkit validates table and
-  column identifiers and uses parameterized queries.
-- `subject_id` is stored verbatim and may be personally identifiable — apply TTL /
-  partition retention (`ClickHousePartitionManager`) per your privacy policy.
+  column identifiers and uses parameterized inserts.
+- `subject_id` is stored verbatim and may be personally identifiable. Apply TTL /
+  partition retention per your privacy policy.
+- Middleware swallows flush failures by design, so add logging/monitoring for
+  the warning message if analytics delivery matters operationally.
 
 ## Examples
 
