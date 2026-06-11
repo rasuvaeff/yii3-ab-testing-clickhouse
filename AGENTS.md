@@ -11,8 +11,9 @@ explicit `flush()`, built on `rasuvaeff/clickhouse-toolkit`
 (`ClickHouseBatchWriter`). This is the production analytics sink.
 Namespace: `Rasuvaeff\Yii3AbTestingClickHouse`.
 
-Public API: `ClickHouseExposureTracker`, `ClickHouseConversionTracker` (each with
-a `flush()` method and a `COLUMNS` constant). Schema ships as ClickHouse `*.sql`
+Public API: `ClickHouseExposureTracker`, `ClickHouseConversionTracker` (each
+implements core's `FlushableTracker` and has a `COLUMNS` constant and a
+configurable `autoFlushSize`). Schema ships as ClickHouse `*.sql`
 files under `migrations/`, applied by the toolkit's `ClickHouseMigrationRunner`.
 
 DI: `config/di.php` binds `ExposureTracker` and `ConversionTracker`, pulling a
@@ -27,10 +28,11 @@ is covered by `ConfigWiringTest`, not by cs/psalm/phpunit.
 1. **Verification is mandatory.** Never claim "done" without a fresh green
    `composer build`. "Should work" does not count.
 2. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
-3. **Tracking never blocks the request.** Trackers only append to an in-memory
-   buffer; the network write happens once on `flush()` (PSR-15 terminate /
-   shutdown). Never write per event, and never call the ClickHouse client from
-   `trackExposure()` / `trackConversion()`.
+3. **Tracking never blocks or breaks the request.** Trackers append to an
+   in-memory buffer; writes happen on `flush()` (PSR-15 terminate / shutdown) or
+   amortized via auto-flush at `autoFlushSize` multiples. Never write per event,
+   and a failed auto-flush must never throw into the request — events are kept,
+   capped at ten thresholds (oldest dropped).
 4. **Preserve the public contract.** A tracker's `COLUMNS` constant must match the
    columns of the `ClickHouseBatchWriter` it is given and the table DDL in
    `migrations/`. Update README + tests with any API change.

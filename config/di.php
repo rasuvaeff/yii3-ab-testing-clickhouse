@@ -22,6 +22,7 @@ return [
                 columns: ClickHouseExposureTracker::COLUMNS,
                 batchSize: $config['batchSize'] ?? 1000,
             ),
+            autoFlushSize: $config['autoFlushSize'] ?? 1000,
         );
     },
     ConversionTracker::class => static function (ClickHouseClient $client) use ($params): ConversionTracker {
@@ -34,6 +35,7 @@ return [
                 columns: ClickHouseConversionTracker::COLUMNS,
                 batchSize: $config['batchSize'] ?? 1000,
             ),
+            autoFlushSize: $config['autoFlushSize'] ?? 1000,
         );
     },
 ];

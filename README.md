@@ -64,8 +64,8 @@ use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
 
 | Table | Columns |
 |---|---|
-| `ab_exposures` | `experiment, variant, subject_id, is_forced, is_fallback, environment, ts` |
-| `ab_conversions` | `experiment, variant, subject_id, goal, is_forced, is_fallback, environment, ts` |
+| `ab_exposures` | `experiment, variant, subject_id, is_forced, is_fallback, is_sticky, environment, ts` |
+| `ab_conversions` | `experiment, variant, subject_id, goal, is_forced, is_fallback, is_sticky, environment, ts` |
 
 Both are `MergeTree` partitioned by `toYYYYMM(ts)`; `ts` defaults to `now()`.
 

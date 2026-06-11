@@ -39,6 +39,7 @@ final class ClickHouseExposureTrackerTest extends TestCase
                 'subject_id' => 'user-1',
                 'is_forced' => 0,
                 'is_fallback' => 0,
+                'is_sticky' => 0,
                 'environment' => '',
             ],
         ], $this->writer->rows);
@@ -66,6 +67,7 @@ final class ClickHouseExposureTrackerTest extends TestCase
                 'subject_id' => 'u1',
                 'is_forced' => 1,
                 'is_fallback' => 1,
+                'is_sticky' => 0,
                 'environment' => 'production',
             ],
         ], $this->writer->rows);
@@ -100,5 +102,89 @@ final class ClickHouseExposureTrackerTest extends TestCase
 
         $this->assertSame(1, $this->writer->writeCalls);
         $this->assertCount(1, $this->writer->rows);
+    }
+
+    #[Test]
+    public function writesStickyFlag(): void
+    {
+        $this->tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1', isSticky: true));
+        $this->tracker->flush();
+
+        $this->assertSame(1, $this->writer->rows[0]['is_sticky']);
+    }
+
+    #[Test]
+    public function autoFlushWritesWhenBufferReachesThreshold(): void
+    {
+        $tracker = new ClickHouseExposureTracker(writer: $this->writer, autoFlushSize: 2);
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
+        $this->assertSame(0, $this->writer->writeCalls);
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'b', subjectId: 'u2'));
+        $this->assertSame(1, $this->writer->writeCalls);
+        $this->assertCount(2, $this->writer->rows);
+    }
+
+    #[Test]
+    public function failedAutoFlushDoesNotThrowAndKeepsEvents(): void
+    {
+        $failing = new FailingWriter();
+        $tracker = new ClickHouseExposureTracker(writer: $failing, autoFlushSize: 2);
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'b', subjectId: 'u2'));
+
+        $this->assertSame(1, $failing->writeCalls);
+
+        // Events were kept: an explicit flush retries the same buffer.
+        try {
+            $tracker->flush();
+        } catch (\Rasuvaeff\ClickHouseToolkit\ClickHouseWriteException) {
+        }
+
+        $this->assertSame(2, $failing->writeCalls);
+    }
+
+    #[Test]
+    public function failedAutoFlushRetriesAtNextThresholdMultiple(): void
+    {
+        $failing = new FailingWriter();
+        $tracker = new ClickHouseExposureTracker(writer: $failing, autoFlushSize: 2);
+
+        for ($i = 1; $i <= 6; ++$i) {
+            $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: (string) $i));
+        }
+
+        // Attempts at buffer sizes 2, 4 and 6 — not on every event.
+        $this->assertSame(3, $failing->writeCalls);
+    }
+
+    #[Test]
+    public function bufferIsCappedAtTenThresholdsWhenWritesKeepFailing(): void
+    {
+        $flaky = new FlakyWriter();
+        $tracker = new ClickHouseExposureTracker(writer: $flaky, autoFlushSize: 1);
+
+        for ($i = 1; $i <= 15; ++$i) {
+            $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: (string) $i));
+        }
+
+        $flaky->failing = false;
+        $tracker->flush();
+
+        // Cap = 10 × autoFlushSize: the 5 oldest of 15 events were dropped.
+        $this->assertCount(10, $flaky->rows);
+        $this->assertSame('6', $flaky->rows[0]['subject_id']);
+        $this->assertSame('15', $flaky->rows[9]['subject_id']);
+    }
+
+    #[Test]
+    public function throwsOnNonPositiveAutoFlushSize(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Auto-flush size must be at least 1, got 0');
+
+        new ClickHouseExposureTracker(writer: $this->writer, autoFlushSize: 0);
     }
 }

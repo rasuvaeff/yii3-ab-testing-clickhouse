@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS ab_conversions
     goal        String,
     is_forced   UInt8 DEFAULT 0,
     is_fallback UInt8 DEFAULT 0,
+    is_sticky   UInt8 DEFAULT 0,
     environment String DEFAULT '',
     ts          DateTime DEFAULT now()
 )

@@ -7,5 +7,6 @@ return [
         'exposuresTable' => 'ab_exposures',
         'conversionsTable' => 'ab_conversions',
         'batchSize' => 1000,
+        'autoFlushSize' => 1000,
     ],
 ];

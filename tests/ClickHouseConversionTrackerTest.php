@@ -43,6 +43,7 @@ final class ClickHouseConversionTrackerTest extends TestCase
                 'goal' => 'purchase',
                 'is_forced' => 0,
                 'is_fallback' => 0,
+                'is_sticky' => 0,
                 'environment' => '',
             ],
         ], $this->writer->rows);
@@ -72,6 +73,7 @@ final class ClickHouseConversionTrackerTest extends TestCase
                 'goal' => 'signup',
                 'is_forced' => 1,
                 'is_fallback' => 1,
+                'is_sticky' => 0,
                 'environment' => 'staging',
             ],
         ], $this->writer->rows);
@@ -107,5 +109,79 @@ final class ClickHouseConversionTrackerTest extends TestCase
 
         $this->assertSame(1, $this->writer->writeCalls);
         $this->assertCount(1, $this->writer->rows);
+    }
+
+    #[Test]
+    public function writesStickyFlag(): void
+    {
+        $this->tracker->trackConversion(
+            new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1', isSticky: true),
+            goal: 'purchase',
+        );
+        $this->tracker->flush();
+
+        $this->assertSame(1, $this->writer->rows[0]['is_sticky']);
+    }
+
+    #[Test]
+    public function autoFlushWritesWhenBufferReachesThreshold(): void
+    {
+        $tracker = new ClickHouseConversionTracker(writer: $this->writer, autoFlushSize: 2);
+        $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
+
+        $tracker->trackConversion($assignment, goal: 'view');
+        $this->assertSame(0, $this->writer->writeCalls);
+
+        $tracker->trackConversion($assignment, goal: 'purchase');
+        $this->assertSame(1, $this->writer->writeCalls);
+        $this->assertCount(2, $this->writer->rows);
+    }
+
+    #[Test]
+    public function failedAutoFlushDoesNotThrowAndKeepsEvents(): void
+    {
+        $failing = new FailingWriter();
+        $tracker = new ClickHouseConversionTracker(writer: $failing, autoFlushSize: 2);
+        $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
+
+        $tracker->trackConversion($assignment, goal: 'view');
+        $tracker->trackConversion($assignment, goal: 'purchase');
+
+        $this->assertSame(1, $failing->writeCalls);
+
+        try {
+            $tracker->flush();
+        } catch (\Rasuvaeff\ClickHouseToolkit\ClickHouseWriteException) {
+        }
+
+        $this->assertSame(2, $failing->writeCalls);
+    }
+
+    #[Test]
+    public function bufferIsCappedAtTenThresholdsWhenWritesKeepFailing(): void
+    {
+        $flaky = new FlakyWriter();
+        $tracker = new ClickHouseConversionTracker(writer: $flaky, autoFlushSize: 1);
+        $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
+
+        for ($i = 1; $i <= 15; ++$i) {
+            $tracker->trackConversion($assignment, goal: 'goal-' . $i);
+        }
+
+        $flaky->failing = false;
+        $tracker->flush();
+
+        $this->assertCount(10, $flaky->rows);
+        $this->assertSame('goal-6', $flaky->rows[0]['goal']);
+        $this->assertSame('goal-15', $flaky->rows[9]['goal']);
+    }
+
+    #[Test]
+    public function throwsOnNonPositiveAutoFlushSize(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Auto-flush size must be at least 1, got -1');
+
+        new ClickHouseConversionTracker(writer: $this->writer, autoFlushSize: -1);
     }
 }

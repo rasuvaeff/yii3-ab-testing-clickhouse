@@ -14,13 +14,14 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 - `flush()` writes then clears the buffer; empty buffer writes nothing; a failed write keeps the buffer.
 - Booleans stored as `UInt8` (0/1); `environment` defaults to `''`; `ts` filled server-side by `DEFAULT now()`.
 - A tracker's `COLUMNS` constant must match its writer's columns and the table DDL.
+- Trackers implement `FlushableTracker` (core ^1.2); auto-flush writes the buffer once it reaches `autoFlushSize` (default 1000). A failed auto-flush never throws; events are kept (capped at 10 × autoFlushSize, oldest dropped).
 - Binds `ExposureTracker` + `ConversionTracker` in `config/di.php` (one source per key; compose multiple with the core `Composite*Tracker`). The app must register a `SimPod\ClickHouseClient\Client\ClickHouseClient`.
 - Schema ships as `migrations/*.sql`, applied by the toolkit's `ClickHouseMigrationRunner`.
 
 ## Tables
 
-- `ab_exposures(experiment, variant, subject_id, is_forced, is_fallback, environment, ts)`
-- `ab_conversions(experiment, variant, subject_id, goal, is_forced, is_fallback, environment, ts)`
+- `ab_exposures(experiment, variant, subject_id, is_forced, is_fallback, is_sticky, environment, ts)`
+- `ab_conversions(experiment, variant, subject_id, goal, is_forced, is_fallback, is_sticky, environment, ts)`
 
 Both `MergeTree`, partitioned by `toYYYYMM(ts)`, `ts DateTime DEFAULT now()`.
 
