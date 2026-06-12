@@ -118,11 +118,17 @@ final class ClickHouseTrackingFlushMiddlewareTest extends TestCase
     }
 
     #[Test]
-    public function skipsNonFlushableTrackers(): void
+    public function skipsNonFlushableTrackersWithoutCallingFlushOrLogging(): void
     {
+        // A non-flushable tracker is left untouched: the guard returns early, so no
+        // flush() is attempted and nothing is logged. Drop the guard and the missing
+        // flush() raises an Error that is caught and logged — which the empty-log
+        // assertion below detects.
+        $logger = new SpyLogger();
         $middleware = new ClickHouseTrackingFlushMiddleware(
             exposureTracker: $this->createMock(ExposureTracker::class),
             conversionTracker: $this->createMock(ConversionTracker::class),
+            logger: $logger,
         );
         $request = $this->createMock(ServerRequestInterface::class);
         $response = $this->createMock(ResponseInterface::class);
@@ -141,5 +147,6 @@ final class ClickHouseTrackingFlushMiddlewareTest extends TestCase
         $actual = $middleware->process($request, $handler);
 
         $this->assertSame($response, $actual);
+        $this->assertSame([], $logger->warnings);
     }
 }

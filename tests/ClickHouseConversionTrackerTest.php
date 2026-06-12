@@ -138,6 +138,19 @@ final class ClickHouseConversionTrackerTest extends TestCase
     }
 
     #[Test]
+    public function autoFlushesAtTheDefaultThresholdOfOneThousand(): void
+    {
+        $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
+
+        for ($i = 1; $i <= 1000; ++$i) {
+            $this->tracker->trackConversion($assignment, goal: 'g' . $i);
+        }
+
+        $this->assertSame(1, $this->writer->writeCalls);
+        $this->assertCount(1000, $this->writer->rows);
+    }
+
+    #[Test]
     public function failedAutoFlushDoesNotThrowAndKeepsEvents(): void
     {
         $failing = new FailingWriter();
