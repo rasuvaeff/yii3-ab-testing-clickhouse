@@ -6,7 +6,6 @@ namespace Rasuvaeff\Yii3AbTestingClickHouse\Benchmarks;
 
 use Rasuvaeff\ClickHouseToolkit\ClickHouseWriterInterface;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Testo\Bench;
 
 final class AdapterBench
