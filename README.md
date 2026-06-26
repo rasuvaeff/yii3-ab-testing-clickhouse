@@ -146,7 +146,7 @@ in-memory writer).
 composer build          # full gate: validate + normalize + cs + psalm + test
 composer cs:fix         # auto-fix code style
 composer psalm          # static analysis
-composer test           # run tests (integration tests skipped without CLICKHOUSE_HOST)
+composer test           # run unit tests (integration tests skipped without CLICKHOUSE_HOST)
 ```
 
 ## License

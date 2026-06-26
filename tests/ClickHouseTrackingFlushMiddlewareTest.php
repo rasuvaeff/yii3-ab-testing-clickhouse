@@ -4,21 +4,19 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3AbTestingClickHouse\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 use Rasuvaeff\Yii3AbTesting\ConversionTracker;
 use Rasuvaeff\Yii3AbTesting\ExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+use Rasuvaeff\Yii3AbTestingClickHouse\Tests\Support\FakePsrFactory;
+use Testo\Assert;
+use Testo\Codecov\Covers;
+use Testo\Test;
 
-#[CoversClass(ClickHouseTrackingFlushMiddleware::class)]
-final class ClickHouseTrackingFlushMiddlewareTest extends TestCase
+#[Test]
+#[Covers(ClickHouseTrackingFlushMiddleware::class)]
+final class ClickHouseTrackingFlushMiddlewareTest
 {
-    #[Test]
     public function implementsMiddlewareInterface(): void
     {
         $middleware = new ClickHouseTrackingFlushMiddleware(
@@ -26,63 +24,44 @@ final class ClickHouseTrackingFlushMiddlewareTest extends TestCase
             conversionTracker: new SpyFlushableConversionTracker(),
         );
 
-        $this->assertInstanceOf(MiddlewareInterface::class, $middleware);
+        Assert::instanceOf($middleware, MiddlewareInterface::class);
     }
 
-    #[Test]
     public function returnsHandlerResponseAndFlushesBothTrackers(): void
     {
         $exposureTracker = new SpyFlushableExposureTracker();
         $conversionTracker = new SpyFlushableConversionTracker();
         $middleware = new ClickHouseTrackingFlushMiddleware($exposureTracker, $conversionTracker);
-        $request = $this->createMock(ServerRequestInterface::class);
-        $response = $this->createMock(ResponseInterface::class);
-        $handler = new class ($response) implements RequestHandlerInterface {
-            public function __construct(
-                private readonly ResponseInterface $response,
-            ) {}
-
-            #[\Override]
-            public function handle(ServerRequestInterface $request): ResponseInterface
-            {
-                return $this->response;
-            }
-        };
+        $request = FakePsrFactory::serverRequest();
+        $response = FakePsrFactory::response();
+        $handler = FakePsrFactory::handler($response);
 
         $actual = $middleware->process($request, $handler);
 
-        $this->assertSame($response, $actual);
-        $this->assertSame(1, $exposureTracker->flushCalls);
-        $this->assertSame(1, $conversionTracker->flushCalls);
+        Assert::same($actual, $response);
+        Assert::same($exposureTracker->flushCalls, 1);
+        Assert::same($conversionTracker->flushCalls, 1);
     }
 
-    #[Test]
     public function flushesBothTrackersEvenWhenHandlerThrows(): void
     {
         $exposureTracker = new SpyFlushableExposureTracker();
         $conversionTracker = new SpyFlushableConversionTracker();
         $middleware = new ClickHouseTrackingFlushMiddleware($exposureTracker, $conversionTracker);
-        $request = $this->createMock(ServerRequestInterface::class);
-        $handler = new class implements RequestHandlerInterface {
-            #[\Override]
-            public function handle(ServerRequestInterface $request): ResponseInterface
-            {
-                throw new \RuntimeException('boom');
-            }
-        };
+        $request = FakePsrFactory::serverRequest();
+        $handler = FakePsrFactory::throwingHandler(new \RuntimeException('boom'));
 
         try {
             $middleware->process($request, $handler);
-            $this->fail('Expected RuntimeException to be rethrown');
+            Assert::fail('Expected RuntimeException to be rethrown');
         } catch (\RuntimeException $e) {
-            $this->assertSame('boom', $e->getMessage());
+            Assert::same($e->getMessage(), 'boom');
         }
 
-        $this->assertSame(1, $exposureTracker->flushCalls);
-        $this->assertSame(1, $conversionTracker->flushCalls);
+        Assert::same($exposureTracker->flushCalls, 1);
+        Assert::same($conversionTracker->flushCalls, 1);
     }
 
-    #[Test]
     public function swallowsFlushFailuresAndLogsWarnings(): void
     {
         $exposureTracker = new SpyFlushableExposureTracker();
@@ -91,62 +70,46 @@ final class ClickHouseTrackingFlushMiddlewareTest extends TestCase
         $conversionTracker->flushThrowable = new \RuntimeException('conversion failed');
         $logger = new SpyLogger();
         $middleware = new ClickHouseTrackingFlushMiddleware($exposureTracker, $conversionTracker, $logger);
-        $request = $this->createMock(ServerRequestInterface::class);
-        $response = $this->createMock(ResponseInterface::class);
-        $handler = new class ($response) implements RequestHandlerInterface {
-            public function __construct(
-                private readonly ResponseInterface $response,
-            ) {}
-
-            #[\Override]
-            public function handle(ServerRequestInterface $request): ResponseInterface
-            {
-                return $this->response;
-            }
-        };
+        $request = FakePsrFactory::serverRequest();
+        $response = FakePsrFactory::response();
+        $handler = FakePsrFactory::handler($response);
 
         $actual = $middleware->process($request, $handler);
 
-        $this->assertSame($response, $actual);
-        $this->assertCount(2, $logger->warnings);
-        $this->assertSame('Failed to flush ClickHouse A/B testing tracker', $logger->warnings[0]['message']);
-        $this->assertSame('exposure', $logger->warnings[0]['context']['trackerKind']);
-        $this->assertSame(SpyFlushableExposureTracker::class, $logger->warnings[0]['context']['trackerClass']);
-        $this->assertInstanceOf(\RuntimeException::class, $logger->warnings[0]['context']['exception']);
-        $this->assertSame('conversion', $logger->warnings[1]['context']['trackerKind']);
-        $this->assertSame(SpyFlushableConversionTracker::class, $logger->warnings[1]['context']['trackerClass']);
+        Assert::same($actual, $response);
+        Assert::count($logger->warnings, 2);
+        Assert::same($logger->warnings[0]['message'], 'Failed to flush ClickHouse A/B testing tracker');
+        Assert::same($logger->warnings[0]['context']['trackerKind'], 'exposure');
+        Assert::same($logger->warnings[0]['context']['trackerClass'], SpyFlushableExposureTracker::class);
+        Assert::instanceOf($logger->warnings[0]['context']['exception'], \RuntimeException::class);
+        Assert::same($logger->warnings[1]['context']['trackerKind'], 'conversion');
+        Assert::same($logger->warnings[1]['context']['trackerClass'], SpyFlushableConversionTracker::class);
     }
 
-    #[Test]
     public function skipsNonFlushableTrackersWithoutCallingFlushOrLogging(): void
     {
-        // A non-flushable tracker is left untouched: the guard returns early, so no
-        // flush() is attempted and nothing is logged. Drop the guard and the missing
-        // flush() raises an Error that is caught and logged — which the empty-log
-        // assertion below detects.
+        $nonFlushableExposure = new class implements ExposureTracker {
+            #[\Override]
+            public function trackExposure(\Rasuvaeff\Yii3AbTesting\Assignment $assignment): void {}
+        };
+        $nonFlushableConversion = new class implements ConversionTracker {
+            #[\Override]
+            public function trackConversion(\Rasuvaeff\Yii3AbTesting\Assignment $assignment, string $goal): void {}
+        };
+
         $logger = new SpyLogger();
         $middleware = new ClickHouseTrackingFlushMiddleware(
-            exposureTracker: $this->createMock(ExposureTracker::class),
-            conversionTracker: $this->createMock(ConversionTracker::class),
+            exposureTracker: $nonFlushableExposure,
+            conversionTracker: $nonFlushableConversion,
             logger: $logger,
         );
-        $request = $this->createMock(ServerRequestInterface::class);
-        $response = $this->createMock(ResponseInterface::class);
-        $handler = new class ($response) implements RequestHandlerInterface {
-            public function __construct(
-                private readonly ResponseInterface $response,
-            ) {}
-
-            #[\Override]
-            public function handle(ServerRequestInterface $request): ResponseInterface
-            {
-                return $this->response;
-            }
-        };
+        $request = FakePsrFactory::serverRequest();
+        $response = FakePsrFactory::response();
+        $handler = FakePsrFactory::handler($response);
 
         $actual = $middleware->process($request, $handler);
 
-        $this->assertSame($response, $actual);
-        $this->assertSame([], $logger->warnings);
+        Assert::same($actual, $response);
+        Assert::same($logger->warnings, []);
     }
 }
