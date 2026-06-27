@@ -4,28 +4,30 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3AbTestingClickHouse\Tests;
 
-use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
+use InvalidArgumentException;
 use Rasuvaeff\Yii3AbTesting\Assignment;
 use Rasuvaeff\Yii3AbTesting\AssignmentContext;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
+use Testo\Assert;
+use Testo\Codecov\Covers;
+use Testo\Lifecycle\BeforeTest;
+use Testo\Test;
 
-#[CoversClass(ClickHouseConversionTracker::class)]
-final class ClickHouseConversionTrackerTest extends TestCase
+#[Test]
+#[Covers(ClickHouseConversionTracker::class)]
+final class ClickHouseConversionTrackerTest
 {
     private RecordingWriter $writer;
 
     private ClickHouseConversionTracker $tracker;
 
-    #[\Override]
-    protected function setUp(): void
+    #[BeforeTest]
+    public function setUp(): void
     {
         $this->writer = new RecordingWriter();
         $this->tracker = new ClickHouseConversionTracker(writer: $this->writer);
     }
 
-    #[Test]
     public function flushWritesBufferedConversionRow(): void
     {
         $this->tracker->trackConversion(
@@ -35,7 +37,7 @@ final class ClickHouseConversionTrackerTest extends TestCase
 
         $this->tracker->flush();
 
-        $this->assertSame([
+        Assert::same($this->writer->rows, [
             [
                 'experiment' => 'checkout-button',
                 'variant' => 'green',
@@ -46,10 +48,9 @@ final class ClickHouseConversionTrackerTest extends TestCase
                 'is_sticky' => 0,
                 'environment' => '',
             ],
-        ], $this->writer->rows);
+        ]);
     }
 
-    #[Test]
     public function castsFlagsToIntAndReadsEnvironment(): void
     {
         $this->tracker->trackConversion(
@@ -65,7 +66,7 @@ final class ClickHouseConversionTrackerTest extends TestCase
         );
         $this->tracker->flush();
 
-        $this->assertSame([
+        Assert::same($this->writer->rows, [
             [
                 'experiment' => 'exp',
                 'variant' => 'a',
@@ -76,10 +77,9 @@ final class ClickHouseConversionTrackerTest extends TestCase
                 'is_sticky' => 0,
                 'environment' => 'staging',
             ],
-        ], $this->writer->rows);
+        ]);
     }
 
-    #[Test]
     public function flushSendsAllBufferedRowsInOneWrite(): void
     {
         $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
@@ -88,30 +88,27 @@ final class ClickHouseConversionTrackerTest extends TestCase
 
         $this->tracker->flush();
 
-        $this->assertSame(1, $this->writer->writeCalls);
-        $this->assertCount(2, $this->writer->rows);
+        Assert::same($this->writer->writeCalls, 1);
+        Assert::count($this->writer->rows, 2);
     }
 
-    #[Test]
     public function flushWithEmptyBufferDoesNotWrite(): void
     {
         $this->tracker->flush();
 
-        $this->assertSame(0, $this->writer->writeCalls);
+        Assert::same($this->writer->writeCalls, 0);
     }
 
-    #[Test]
     public function bufferIsClearedAfterFlush(): void
     {
         $this->tracker->trackConversion(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'), goal: 'view');
         $this->tracker->flush();
         $this->tracker->flush();
 
-        $this->assertSame(1, $this->writer->writeCalls);
-        $this->assertCount(1, $this->writer->rows);
+        Assert::same($this->writer->writeCalls, 1);
+        Assert::count($this->writer->rows, 1);
     }
 
-    #[Test]
     public function writesStickyFlag(): void
     {
         $this->tracker->trackConversion(
@@ -120,24 +117,22 @@ final class ClickHouseConversionTrackerTest extends TestCase
         );
         $this->tracker->flush();
 
-        $this->assertSame(1, $this->writer->rows[0]['is_sticky']);
+        Assert::same($this->writer->rows[0]['is_sticky'], 1);
     }
 
-    #[Test]
     public function autoFlushWritesWhenBufferReachesThreshold(): void
     {
         $tracker = new ClickHouseConversionTracker(writer: $this->writer, autoFlushSize: 2);
         $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
 
         $tracker->trackConversion($assignment, goal: 'view');
-        $this->assertSame(0, $this->writer->writeCalls);
+        Assert::same($this->writer->writeCalls, 0);
 
         $tracker->trackConversion($assignment, goal: 'purchase');
-        $this->assertSame(1, $this->writer->writeCalls);
-        $this->assertCount(2, $this->writer->rows);
+        Assert::same($this->writer->writeCalls, 1);
+        Assert::count($this->writer->rows, 2);
     }
 
-    #[Test]
     public function autoFlushesAtTheDefaultThresholdOfOneThousand(): void
     {
         $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
@@ -146,11 +141,10 @@ final class ClickHouseConversionTrackerTest extends TestCase
             $this->tracker->trackConversion($assignment, goal: 'g' . $i);
         }
 
-        $this->assertSame(1, $this->writer->writeCalls);
-        $this->assertCount(1000, $this->writer->rows);
+        Assert::same($this->writer->writeCalls, 1);
+        Assert::count($this->writer->rows, 1000);
     }
 
-    #[Test]
     public function failedAutoFlushDoesNotThrowAndKeepsEvents(): void
     {
         $failing = new FailingWriter();
@@ -160,17 +154,16 @@ final class ClickHouseConversionTrackerTest extends TestCase
         $tracker->trackConversion($assignment, goal: 'view');
         $tracker->trackConversion($assignment, goal: 'purchase');
 
-        $this->assertSame(1, $failing->writeCalls);
+        Assert::same($failing->writeCalls, 1);
 
         try {
             $tracker->flush();
         } catch (\Rasuvaeff\ClickHouseToolkit\ClickHouseWriteException) {
         }
 
-        $this->assertSame(2, $failing->writeCalls);
+        Assert::same($failing->writeCalls, 2);
     }
 
-    #[Test]
     public function bufferIsCappedAtTenThresholdsWhenWritesKeepFailing(): void
     {
         $flaky = new FlakyWriter();
@@ -184,17 +177,18 @@ final class ClickHouseConversionTrackerTest extends TestCase
         $flaky->failing = false;
         $tracker->flush();
 
-        $this->assertCount(10, $flaky->rows);
-        $this->assertSame('goal-6', $flaky->rows[0]['goal']);
-        $this->assertSame('goal-15', $flaky->rows[9]['goal']);
+        Assert::count($flaky->rows, 10);
+        Assert::same($flaky->rows[0]['goal'], 'goal-6');
+        Assert::same($flaky->rows[9]['goal'], 'goal-15');
     }
 
-    #[Test]
     public function throwsOnNonPositiveAutoFlushSize(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Auto-flush size must be at least 1, got -1');
-
-        new ClickHouseConversionTracker(writer: $this->writer, autoFlushSize: -1);
+        try {
+            new ClickHouseConversionTracker(writer: $this->writer, autoFlushSize: -1);
+            Assert::fail('Expected InvalidArgumentException');
+        } catch (InvalidArgumentException $e) {
+            Assert::string($e->getMessage())->contains('Auto-flush size must be at least 1, got -1');
+        }
     }
 }

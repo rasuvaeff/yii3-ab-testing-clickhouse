@@ -21,7 +21,7 @@ DI: `config/di.php` binds `ExposureTracker`, `ConversionTracker`, and the flush
 middleware class. The tracker factories pull a
 `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` from the container and build a `ClickHouseBatchWriter` per table. The core binds neither tracker key; one
 source owns each (compose several sinks with the core `Composite*Tracker`).
-`config/di.php` is covered by `ConfigWiringTest`, not by cs/psalm/phpunit.
+`config/di.php` is covered by `ConfigWiringTest`, not by cs/psalm/testo.
 
 ## Golden rules
 
@@ -49,8 +49,21 @@ docker run --rm -v "$PWD":/app -w /app composer:2 composer psalm
 docker run --rm -v "$PWD":/app -w /app composer:2 composer test
 ```
 
-Or with Make: `make build`, `make cs-fix`, `make psalm`, `make test`,
-`make mutation`. `composer.lock` is gitignored (library).
+Or with Make:
+
+```bash
+make build
+make cs-fix
+make psalm
+make test
+make test-coverage
+make mutation
+make release-check
+```
+
+`make test-coverage` and `make mutation` bootstrap `pcov` inside the
+`composer:2` container because the base image has no coverage driver.
+`composer.lock` is gitignored (library).
 
 ## Invariants & gotchas
 

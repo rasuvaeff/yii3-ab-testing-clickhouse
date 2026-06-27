@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3AbTestingClickHouse\Tests\Integration;
 
-use PHPUnit\Framework\Attributes\CoversNothing;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
@@ -17,6 +14,9 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableExposureTracker;
+use Testo\Assert;
+use Testo\Codecov\CoversNothing;
+use Testo\Test;
 
 /**
  * Exercises the package `config/di.php` (covered by neither cs, psalm, nor the
@@ -25,54 +25,50 @@ use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableExposureTracker;
  * core package's own vendored `config/di.php` (a key defined by two packages in
  * the `di` group is what triggers `yiisoft/config`'s `Duplicate key` error).
  */
+#[Test]
 #[CoversNothing]
-final class ConfigWiringTest extends TestCase
+final class ConfigWiringTest
 {
-    #[Test]
     public function bindsFlushMiddleware(): void
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ClickHouseTrackingFlushMiddleware::class];
 
-        $this->assertInstanceOf(
-            ClickHouseTrackingFlushMiddleware::class,
+        Assert::instanceOf(
             $factory(new SpyFlushableExposureTracker(), new SpyFlushableConversionTracker()),
+            ClickHouseTrackingFlushMiddleware::class,
         );
     }
 
-    #[Test]
     public function bindsClickHouseExposureTracker(): void
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ExposureTracker::class];
 
-        $this->assertInstanceOf(ClickHouseExposureTracker::class, $factory($this->createClientFactory()));
+        Assert::instanceOf($factory($this->createClientFactory()), ClickHouseExposureTracker::class);
     }
 
-    #[Test]
     public function bindsClickHouseConversionTracker(): void
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ConversionTracker::class];
 
-        $this->assertInstanceOf(ClickHouseConversionTracker::class, $factory($this->createClientFactory()));
+        Assert::instanceOf($factory($this->createClientFactory()), ClickHouseConversionTracker::class);
     }
 
-    #[Test]
     public function packageBindsOnlyTrackerAndMiddlewareKeys(): void
     {
-        $this->assertSame(
-            [ClickHouseTrackingFlushMiddleware::class, ExposureTracker::class, ConversionTracker::class],
+        Assert::same(
             array_keys($this->loadPackage()),
+            [ClickHouseTrackingFlushMiddleware::class, ExposureTracker::class, ConversionTracker::class],
         );
     }
 
-    #[Test]
     public function coreAndPackageDoNotShareDiKeys(): void
     {
         $overlap = array_intersect_key($this->loadCore(), $this->loadPackage());
 
-        $this->assertSame([], $overlap, 'core and -clickhouse must not define the same di key');
+        Assert::same($overlap, [], 'core and -clickhouse must not define the same di key');
     }
 
     /**
@@ -97,9 +93,16 @@ final class ConfigWiringTest extends TestCase
 
     private function createClientFactory(): ClickHouseClientFactory
     {
+        $fakeClient = new class implements ClientInterface {
+            public function sendRequest(\Psr\Http\Message\RequestInterface $request): \Psr\Http\Message\ResponseInterface
+            {
+                throw new \RuntimeException('No network in unit tests');
+            }
+        };
+
         return new ClickHouseClientFactory(
             config: new ClickHouseConfig(host: '127.0.0.1', port: 8123),
-            httpClient: $this->createMock(ClientInterface::class),
+            httpClient: $fakeClient,
             requestFactory: new \GuzzleHttp\Psr7\HttpFactory(),
             streamFactory: new \GuzzleHttp\Psr7\HttpFactory(),
             uriFactory: new \GuzzleHttp\Psr7\HttpFactory(),

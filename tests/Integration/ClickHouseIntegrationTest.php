@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3AbTestingClickHouse\Tests\Integration;
 
-use PHPUnit\Framework\Attributes\CoversNothing;
-use PHPUnit\Framework\Attributes\Test;
-use PHPUnit\Framework\TestCase;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
@@ -17,14 +14,19 @@ use Rasuvaeff\Yii3AbTesting\Assignment;
 use Rasuvaeff\Yii3AbTesting\AssignmentContext;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
+use Testo\Assert;
+use Testo\Codecov\CoversNothing;
+use Testo\Lifecycle\BeforeTest;
+use Testo\Test;
 
 /**
  * End-to-end test against a real ClickHouse server. Skipped unless
  * CLICKHOUSE_HOST is set. Applies the shipped migrations, tracks events through
  * the buffered trackers, and reads them back.
  */
+#[Test]
 #[CoversNothing]
-final class ClickHouseIntegrationTest extends TestCase
+final class ClickHouseIntegrationTest
 {
     private ClickHouseClientFactory $clientFactory;
 
@@ -35,12 +37,12 @@ final class ClickHouseIntegrationTest extends TestCase
         return $value === false || $value === '' ? $default : $value;
     }
 
-    #[\Override]
-    protected function setUp(): void
+    #[BeforeTest]
+    public function setUp(): void
     {
         $host = getenv('CLICKHOUSE_HOST');
         if ($host === false || $host === '') {
-            $this->markTestSkipped('CLICKHOUSE_HOST is not set; skipping integration tests.');
+            return;
         }
 
         $this->clientFactory = new ClickHouseClientFactory(new ClickHouseConfig(
@@ -59,9 +61,12 @@ final class ClickHouseIntegrationTest extends TestCase
         (new ClickHouseMigrationRunner($client, dirname(__DIR__, 2) . '/migrations'))->run();
     }
 
-    #[Test]
     public function flushesExposuresToClickHouse(): void
     {
+        if (!isset($this->clientFactory)) {
+            return;
+        }
+
         $writer = new ClickHouseBatchWriter(
             $this->clientFactory->create(),
             'ab_exposures',
@@ -78,12 +83,15 @@ final class ClickHouseIntegrationTest extends TestCase
         $tracker->trackExposure(new Assignment(experiment: 'checkout-button', variant: 'control', subjectId: 'user-2'));
         $tracker->flush();
 
-        $this->assertSame(2, $this->countRows('ab_exposures'));
+        Assert::same($this->countRows('ab_exposures'), 2);
     }
 
-    #[Test]
     public function flushesConversionsToClickHouse(): void
     {
+        if (!isset($this->clientFactory)) {
+            return;
+        }
+
         $writer = new ClickHouseBatchWriter(
             $this->clientFactory->create(),
             'ab_conversions',
@@ -97,8 +105,8 @@ final class ClickHouseIntegrationTest extends TestCase
         );
         $tracker->flush();
 
-        $this->assertSame(1, $this->countRows('ab_conversions'));
-        $this->assertSame('purchase', $this->firstGoal());
+        Assert::same($this->countRows('ab_conversions'), 1);
+        Assert::same($this->firstGoal(), 'purchase');
     }
 
     private function countRows(string $table): int
