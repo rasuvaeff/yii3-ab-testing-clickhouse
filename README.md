@@ -6,6 +6,7 @@
 [![Static Analysis](https://img.shields.io/github/actions/workflow/status/rasuvaeff/yii3-ab-testing-clickhouse/static-analysis.yml?branch=master&label=static%20analysis)](https://github.com/rasuvaeff/yii3-ab-testing-clickhouse/actions)
 [![PHP](https://img.shields.io/packagist/dependency-v/rasuvaeff/yii3-ab-testing-clickhouse/php)](https://packagist.org/packages/rasuvaeff/yii3-ab-testing-clickhouse)
 [![License](https://img.shields.io/packagist/l/rasuvaeff/yii3-ab-testing-clickhouse.svg)](LICENSE.md)
+[Русская версия](README.ru.md)
 
 ClickHouse exposure and conversion trackers for Yii3 A/B testing. Implements the
 `ExposureTracker` and `ConversionTracker` interfaces from `rasuvaeff/yii3-ab-testing`,
