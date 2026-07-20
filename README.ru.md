@@ -1,34 +1,43 @@
 # rasuvaeff/yii3-ab-testing-clickhouse
+
 [![Stable Version](https://img.shields.io/packagist/v/rasuvaeff/yii3-ab-testing-clickhouse.svg?label=stable)](https://packagist.org/packages/rasuvaeff/yii3-ab-testing-clickhouse)
 [![Total Downloads](https://img.shields.io/packagist/dt/rasuvaeff/yii3-ab-testing-clickhouse.svg)](https://packagist.org/packages/rasuvaeff/yii3-ab-testing-clickhouse)
 [![Build](https://img.shields.io/github/actions/workflow/status/rasuvaeff/yii3-ab-testing-clickhouse/build.yml?branch=master)](https://github.com/rasuvaeff/yii3-ab-testing-clickhouse/actions)
 [![Static Analysis](https://img.shields.io/github/actions/workflow/status/rasuvaeff/yii3-ab-testing-clickhouse/static-analysis.yml?branch=master&label=static%20analysis)](https://github.com/rasuvaeff/yii3-ab-testing-clickhouse/actions)
 [![PHP](https://img.shields.io/packagist/dependency-v/rasuvaeff/yii3-ab-testing-clickhouse/php)](https://packagist.org/packages/rasuvaeff/yii3-ab-testing-clickhouse)
 [![License](https://img.shields.io/packagist/l/rasuvaeff/yii3-ab-testing-clickhouse.svg)](LICENSE.md)
-Трекеры воздействия и конверсий ClickHouse для A/B-тестирования Yii3. Реализует интерфейсы
- ExposureTracker и ConversionTracker из rasuvaeff/yii3-ab-testing,
- буферизующие события в памяти и записывающие их в ClickHouse в пакетном режиме.
+[English version](README.md)
 
- > Используете помощника по программированию с искусственным интеллектом? [llms.txt](llms.txt) содержит компактную ссылку на API, которую вы можете использовать в контексте приглашения. @@ЛИНИЯ@@
+Трекеры показов и конверсий в ClickHouse для A/B-тестирования в Yii3. Реализует
+интерфейсы `ExposureTracker` и `ConversionTracker` из `rasuvaeff/yii3-ab-testing`:
+события буферизуются в памяти и записываются в ClickHouse пакетами.
+
+> Используете AI-ассистента? В [llms.txt](llms.txt) — компактный API-справочник,
+> которым можно поделиться с моделью.
+
 ## Требования
+
 - PHP 8.3+
- - `rasuvaeff/yii3-ab-testing` ^1.2
- - `rasuvaeff/clickhouse-toolkit` ^1.1
- - HTTP-клиент PSR-18 (например, `guzzlehttp/guzzle`) для подключения ClickHouse
+- `rasuvaeff/yii3-ab-testing` ^1.2
+- `rasuvaeff/clickhouse-toolkit` ^1.1
+- PSR-18 HTTP-клиент (например `guzzlehttp/guzzle`) для подключения к ClickHouse
 
 ## Установка
+
 ```bash
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
-С помощью плагина конфигурации Yii3 этот пакет автоматически связывает ExposureTracker, ConversionTracker
- и ClickHouseTrackingFlushMiddleware. Не привязывайте интерфейсы
- трекера от другого адаптера одновременно, иначе `yiisoft/config` сообщит об ошибке
- `Duplate key`. Чтобы отправлять события в несколько приемников, скомпонуйте их с помощью ядра
- CompositeExposureTracker или CompositeConversionTracker.
 
- Фабрика DI извлекает `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`
- из контейнера и использует его для создания пакетных средств записи. Привяжите фабрику в
- вашего приложения:
+С config-plugin из Yii3 пакет автоматически биндит `ExposureTracker`,
+`ConversionTracker` и `ClickHouseTrackingFlushMiddleware`. Не биндите интерфейсы
+трекеров из другого адаптера одновременно — иначе `yiisoft/config` сообщит об
+ошибке `Duplicate key`. Чтобы отправлять события в несколько приёмников,
+скомпонуйте их через ядерные `CompositeExposureTracker` /
+`CompositeConversionTracker`.
+
+DI-фабрика достаёт из контейнера
+`Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` и использует его для
+создания пакетных писателей. Зарегистрируйте фабрику в приложении:
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
@@ -40,9 +49,11 @@ return [
     ),
 ];
 ```
+
 ## Схема базы данных
-DDL для двух таблиц событий поставляется в папке `migrations/` как файлы ClickHouse `*.sql`
-, применяемые с помощью `ClickHouseMigrationRunner` из набора инструментов:
+
+DDL для двух таблиц событий поставляется под `migrations/` как ClickHouse-файлы
+`*.sql` и применяется через `ClickHouseMigrationRunner` из toolkit'а:
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
@@ -52,13 +63,17 @@ use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
     __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
 ))->run();
 ```
-| Стол | Столбцы |
- |---|---|
- | `ab_exposures` | `эксперимент, вариант, subject_id, is_forced, is_fallback, is_sticky, среда, ts` |
- | `ab_conversions` | `эксперимент, вариант, subject_id, цель, is_forced, is_fallback, is_sticky, среда, ts` |
 
- Оба представляют собой `MergeTree`, разделенные `toYYYYMM(ts)`; `ts` по умолчанию имеет значение `now()`. @@ЛИНИЯ@@
+| Таблица | Колонки |
+|---|---|
+| `ab_exposures` | `experiment, variant, subject_id, is_forced, is_fallback, is_sticky, environment, ts` |
+| `ab_conversions` | `experiment, variant, subject_id, goal, is_forced, is_fallback, is_sticky, environment, ts` |
+
+Обе таблицы — `MergeTree` с партицированием по `toYYYYMM(ts)`; `ts` по умолчанию
+равно `now()`.
+
 ## Использование
+
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\Yii3AbTesting\AbTesting;
@@ -83,10 +98,13 @@ $assignment = $ab->assign(experiment: 'checkout-button', subjectId: (string) $us
 $ab->trackExposure($assignment);            // buffered, not sent yet
 $ab->trackConversion($assignment, goal: 'purchase');
 ```
+
 ### Сброс в конце запроса
-Отслеживание никогда не вызывает сетевой вызов trackExposure() или trackConversion().
- Строки добавляются в буфер в памяти и записываются с помощью `flush()`. В пакет
- входит ClickHouseTrackingFlushMiddleware для рекомендуемой очистки в конце запроса:
+
+Трекинг никогда не делает сетевого вызова в `trackExposure()` или
+`trackConversion()`. Строки накапливаются в in-memory буфере и записываются на
+`flush()`. Пакет содержит `ClickHouseTrackingFlushMiddleware` для рекомендуемого
+сброса в конце запроса:
 
 ```php
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
@@ -96,35 +114,48 @@ return [
     // place it late in the PSR-15 pipeline
 ];
 ```
-Промежуточное программное обеспечение оборачивает нижестоящий обработчик в `try/finally`, очищает оба трекера
- после запроса и поглощает/регистрирует ошибки очистки, поэтому аналитика никогда
- не нарушает ответ пользователя.
 
- Если вы не используете конвейер PSR-15, вызовите `flush()` самостоятельно один раз в конце запроса
- или из `register_shutdown_function()`. @@ЛИНИЯ@@
-## Справочник по API
+Middleware оборачивает downstream-обработчик в `try/finally`, сбрасывает оба
+трекера после запроса и проглатывает/логирует ошибки сброса, чтобы аналитика
+никогда не ломала ответ пользователю.
+
+Если вы не используете PSR-15 pipeline, вызывайте `flush()` сами — один раз в
+конце запроса или из `register_shutdown_function()`.
+
+## API reference
+
 | Класс | Описание |
- |---|---|
- | `ClickHouseExposureTracker` | Буферизирует риски; `flush()` выполняет пакетную запись в `ab_exposures` |
- | `ClickHouseConversionTracker` | Преобразования буферов (с «целью»); `flush()` выполняет пакетную запись в `ab_conversions` |
- | `ClickHouseTrackingFlushMiddleware` | Промежуточное программное обеспечение PSR-15, которое безопасно очищает оба трекера в конце запроса | @@ЛИНИЯ@@
+|---|---|
+| `ClickHouseExposureTracker` | Буферизует показы; `flush()` пакетно пишет в `ab_exposures` |
+| `ClickHouseConversionTracker` | Буферизует конверсии (с `goal`); `flush()` пакетно пишет в `ab_conversions` |
+| `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware, безопасно сбрасывающее оба трекера в конце запроса |
+
 ## Безопасность
-- Учетные данные для подключения передаются через ClickHouseClientFactory
- инструментария (заголовки/конфигурация из env), а не через URL-адреса. Инструментарий проверяет идентификаторы таблиц и столбцов
- и использует параметризованные вставки.
- — `subject_id` сохраняется дословно и может идентифицировать личность. Примените сохранение разделов TTL /
- в соответствии с вашей политикой конфиденциальности.
- — промежуточное программное обеспечение по своей конструкции игнорирует сбои очистки, поэтому добавьте ведение журнала/мониторинг для
- предупреждающего сообщения, если доставка аналитики имеет важное значение для эксплуатации. @@ЛИНИЯ@@
+
+- Учётные данные подключения передаются через `ClickHouseClientFactory` из
+  toolkit'а (заголовки / конфиг из env), а не в URL. Toolkit валидирует
+  идентификаторы таблиц и колонок и использует параметризованные вставки.
+- `subject_id` хранится как есть и может содержать персональные данные.
+  Настройте TTL / партиционную политику удержания в соответствии с вашей
+  privacy-политикой.
+- Middleware намеренно проглатывает ошибки сброса — добавьте логирование /
+  мониторинг для warning-сообщения, если доставка аналитики критична
+  операционно.
+
 ## Примеры
-См. [examples/](examples/) для работоспособного сценария (сервер не требуется — используется записывающее устройство
- в памяти). @@ЛИНИЯ@@
+
+См. [examples/](examples/) — запускаемый скрипт (сервер не требуется,
+используется in-memory writer).
+
 ## Разработка
+
 ```bash
 composer build          # full gate: validate + normalize + cs + psalm + test
 composer cs:fix         # auto-fix code style
 composer psalm          # static analysis
 composer test           # run unit tests (integration tests skipped without CLICKHOUSE_HOST)
 ```
+
 ## Лицензия
-BSD-3-пункт. См. [LICENSE.md](LICENSE.md).
+
+BSD-3-Clause. См. [LICENSE.md](LICENSE.md).
