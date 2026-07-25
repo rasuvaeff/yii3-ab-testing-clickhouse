@@ -67,6 +67,21 @@ make release-check
 
 ## Invariants & gotchas
 
+- **The shipped DDL is parameterised, and the two sides are configured
+  separately.** `migrations/*.sql` carry `{{exposures_table}}` /
+  `{{conversions_table}}`; the runner resolves them (`clickhouse-toolkit` ^1.6)
+  before hashing. This package's own `exposuresTable`/`conversionsTable` params
+  reach only the writers — the placeholders come from
+  `'rasuvaeff/yii3-clickhouse-toolkit' => ['migrationPlaceholders' => …]`,
+  because `yiisoft/config` lets exactly one vendor package define a params key.
+  Both READMEs show defining the name once and referencing it twice.
+- **Never hard-code a table name back into the DDL.** `MigrationPlaceholderTest`
+  fails if you do: nothing in PHP references those tokens, so a rename would
+  otherwise surface only at deploy time as "unresolved placeholder".
+- The runner hashes the **resolved** SQL, so switching these files to
+  placeholders was invisible to existing installations (both `sha1` values are
+  unchanged for the default names). The same property means renaming after an
+  apply is a divergence, not a silent second table.
 - Trackers depend on the toolkit's `ClickHouseWriterInterface` (injected), so unit
   tests use in-memory writers and spies — no server needed for `composer build`.
 - `flush()` writes the buffer then clears it; an empty buffer writes nothing; a

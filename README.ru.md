@@ -53,16 +53,59 @@ return [
 ## Схема базы данных
 
 DDL для двух таблиц событий поставляется под `migrations/` как ClickHouse-файлы
-`*.sql` и применяется через `ClickHouseMigrationRunner` из toolkit'а:
+`*.sql` и применяется через `ClickHouseMigrationRunner` из toolkit'а. Имена
+таблиц — плейсхолдеры `{{exposures_table}}` / `{{conversions_table}}`, раннер
+подставляет их до вычисления контрольной суммы и выполнения:
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
 
 (new ClickHouseMigrationRunner(
-    $clickHouseClient,
-    __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
+    client: $clickHouseClient,
+    migrationsPath: __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
+    placeholders: [
+        'exposures_table' => 'ab_exposures',
+        'conversions_table' => 'ab_conversions',
+    ],
 ))->run();
 ```
+
+При проводке через `rasuvaeff/yii3-clickhouse-toolkit` (v1.1+) те же значения
+приходят из params. Имя используется дважды — writer'ом и миграцией — поэтому
+задавайте его один раз:
+
+```php
+// config/common/params.php
+$exposures = 'ab_exposures';
+$conversions = 'ab_conversions';
+
+return [
+    'rasuvaeff/yii3-ab-testing-clickhouse' => [
+        'exposuresTable' => $exposures,
+        'conversionsTable' => $conversions,
+    ],
+    'rasuvaeff/yii3-clickhouse-toolkit' => [
+        'migrationPlaceholders' => [
+            'exposures_table' => $exposures,
+            'conversions_table' => $conversions,
+        ],
+    ],
+];
+```
+
+Два блока params, а не один, потому что `yiisoft/config` разрешает определять
+конкретный ключ ровно одному vendor-пакету: этот пакет не может дописать
+`migrationPlaceholders` в конфигурацию toolkit'а без ошибки `Duplicate key`.
+
+До v1.1 params переименовывали только **writer**, а поставляемый DDL всегда
+создавал `ab_exposures` / `ab_conversions` — то есть настройка давала writer,
+пишущий в таблицу, которую никто не создавал.
+
+**Переименование после первого применения.** Контрольная сумма раннера считается
+по подставленному SQL, поэтому смена имени после применения миграции
+сообщается как расхождение, а не создаёт молча вторую таблицу. Создайте новую
+таблицу сами (DDL лежит в `migrations/`) либо удалите строку этого файла из
+таблицы `_migrations` и перезапустите.
 
 | Таблица | Колонки |
 |---|---|

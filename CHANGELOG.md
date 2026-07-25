@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.1.0 — 2026-07-25
+
+- The shipped DDL no longer hard-codes table names: `migrations/*.sql` use
+  `{{exposures_table}}` / `{{conversions_table}}`, resolved by
+  `ClickHouseMigrationRunner` (requires `rasuvaeff/clickhouse-toolkit` `^1.6`,
+  or `rasuvaeff/yii3-clickhouse-toolkit` `^1.1` when wired through params).
+  Until now `exposuresTable` / `conversionsTable` repointed only the **writer**
+  while the migration always created `ab_exposures` / `ab_conversions` — setting
+  them produced a writer inserting into a table nothing had created.
+- **Existing installations are unaffected.** The runner hashes the resolved SQL,
+  and resolving the new files with the default names reproduces the old files
+  byte for byte (verified: both `sha1` values are unchanged), so no migration is
+  reported as diverged.
+- Renaming a table *after* the migration has been applied is reported as a
+  divergence — the README says what to do about it.
+
 ## 1.0.1 — 2026-06-27
 
 - Migrate test suite from PHPUnit to Testo. Internal change, no public API impact.

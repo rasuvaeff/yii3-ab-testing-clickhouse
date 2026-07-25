@@ -18,6 +18,7 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 - Trackers implement `FlushableTracker` (core ^1.2); auto-flush writes the buffer once it reaches `autoFlushSize` (default 1000). A failed auto-flush never throws; events are kept (capped at 10 × autoFlushSize, oldest dropped).
 - Binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` in `config/di.php`. The app must register a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`.
 - Schema ships as `migrations/*.sql`, applied by the toolkit's `ClickHouseMigrationRunner`.
+- Table names in that DDL are `{{exposures_table}}` / `{{conversions_table}}` placeholders (since 1.1), resolved by the runner BEFORE it hashes the file. Pass them via the runner's `placeholders:` argument, or via `'rasuvaeff/yii3-clickhouse-toolkit' => ['migrationPlaceholders' => [...]]` when wired through params — the writer's `exposuresTable`/`conversionsTable` params do NOT reach the DDL. Renaming after a migration was applied surfaces as a checksum divergence.
 
 ## Tables
 

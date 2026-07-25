@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS ab_exposures
+CREATE TABLE IF NOT EXISTS {{exposures_table}}
 (
     experiment  String,
     variant     String,
