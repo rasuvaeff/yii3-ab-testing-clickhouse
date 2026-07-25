@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.1.1 — 2026-07-25
+
+- Fix `tests/Integration/ClickHouseIntegrationTest`: it built the migration
+  runner without placeholders, so against a real ClickHouse it aborted with
+  "unresolved placeholder" as of 1.1.0. The suite is skipped unless
+  `CLICKHOUSE_HOST` is set, so CI stayed green while the path was broken —
+  verified both ways against a live server before and after the fix.
+
 ## 1.1.0 — 2026-07-25
 
 - The shipped DDL no longer hard-codes table names: `migrations/*.sql` use

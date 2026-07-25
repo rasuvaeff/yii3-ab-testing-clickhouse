@@ -58,7 +58,16 @@ final class ClickHouseIntegrationTest
             $client->executeQuery('DROP TABLE IF EXISTS ' . $table);
         }
 
-        (new ClickHouseMigrationRunner($client, dirname(__DIR__, 2) . '/migrations'))->run();
+        // the shipped DDL is parameterised: without these the runner refuses to
+        // run rather than sending "{{exposures_table}}" to the server
+        (new ClickHouseMigrationRunner(
+            client: $client,
+            migrationsPath: dirname(__DIR__, 2) . '/migrations',
+            placeholders: [
+                'exposures_table' => 'ab_exposures',
+                'conversions_table' => 'ab_conversions',
+            ],
+        ))->run();
     }
 
     public function flushesExposuresToClickHouse(): void

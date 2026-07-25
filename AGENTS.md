@@ -94,6 +94,17 @@ make release-check
 - Integration test (`tests/Integration/ClickHouseIntegrationTest`) is skipped
   unless `CLICKHOUSE_HOST` is set; it applies `migrations/` via
   `ClickHouseMigrationRunner`. The app must register a `ClickHouseClientFactory` in DI.
+- **Any change to `migrations/` must be verified with the Integration suite
+  actually running**, not just `composer build`. The suite skips without
+  `CLICKHOUSE_HOST`, so CI is green regardless — 1.1.0 shipped with this very
+  test broken by the placeholder change and 1.1.1 fixed it:
+
+  ```bash
+  docker run -d --name ch-abtest -p 8124:8123 -e CLICKHOUSE_PASSWORD=ch_test clickhouse/clickhouse-server:24.8
+  docker run --rm --network host -v "$PWD/..":/repo -w /repo/yii3-ab-testing-clickhouse \
+    -e CLICKHOUSE_HOST=127.0.0.1 -e CLICKHOUSE_PORT=8124 -e CLICKHOUSE_PASSWORD=ch_test \
+    composer:2 sh -lc 'vendor/bin/testo --suite=Integration'
+  ```
 - Code: `declare(strict_types=1)`, `final class` (trackers hold a mutable buffer so
   they are not `readonly`), `#[\Override]`, explicit types.
 
