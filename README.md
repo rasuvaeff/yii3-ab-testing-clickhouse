@@ -51,16 +51,59 @@ return [
 ## Database schema
 
 DDL for the two event tables ships under `migrations/` as ClickHouse `*.sql`
-files, applied by the toolkit's `ClickHouseMigrationRunner`:
+files, applied by the toolkit's `ClickHouseMigrationRunner`. The table names are
+`{{exposures_table}}` / `{{conversions_table}}` placeholders, resolved by the
+runner before the file is hashed and executed:
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
 
 (new ClickHouseMigrationRunner(
-    $clickHouseClient,
-    __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
+    client: $clickHouseClient,
+    migrationsPath: __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
+    placeholders: [
+        'exposures_table' => 'ab_exposures',
+        'conversions_table' => 'ab_conversions',
+    ],
 ))->run();
 ```
+
+Wired through `rasuvaeff/yii3-clickhouse-toolkit` (v1.1+), the same values come
+from params. The name is used twice — by the writer and by the migration — so
+define it once:
+
+```php
+// config/common/params.php
+$exposures = 'ab_exposures';
+$conversions = 'ab_conversions';
+
+return [
+    'rasuvaeff/yii3-ab-testing-clickhouse' => [
+        'exposuresTable' => $exposures,
+        'conversionsTable' => $conversions,
+    ],
+    'rasuvaeff/yii3-clickhouse-toolkit' => [
+        'migrationPlaceholders' => [
+            'exposures_table' => $exposures,
+            'conversions_table' => $conversions,
+        ],
+    ],
+];
+```
+
+Two params blocks rather than one because `yiisoft/config` allows exactly one
+vendor package to define a given params key: this package cannot contribute to
+the toolkit's `migrationPlaceholders` without a `Duplicate key` error.
+
+Before v1.1 the params renamed only the **writer** while the shipped DDL always
+created `ab_exposures` / `ab_conversions` — configuring them produced a writer
+inserting into a table nothing had created.
+
+**Renaming after the first apply.** The runner's checksum covers the resolved
+SQL, so changing a name once the migration has been applied is reported as a
+divergence instead of silently creating a second table. Create the new table
+yourself (the DDL is in `migrations/`), or drop the file's row from the
+`_migrations` table, then re-run.
 
 | Table | Columns |
 |---|---|
