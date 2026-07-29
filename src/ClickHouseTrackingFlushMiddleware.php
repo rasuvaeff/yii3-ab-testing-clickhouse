@@ -18,8 +18,8 @@ use Rasuvaeff\Yii3AbTesting\FlushableTracker;
  * Flushes buffered ClickHouse-backed A/B trackers once per request without
  * ever breaking the request/response flow if analytics storage is down.
  *
- * Place this late in the PSR-15 pipeline so it runs after application code has
- * tracked all exposures/conversions for the request.
+ * Place this outside the middleware/application code that tracks events so its
+ * `finally` block runs after that downstream code has completed.
  *
  * @api
  */

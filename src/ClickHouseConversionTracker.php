@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3AbTestingClickHouse;
 
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseWriteException;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseWriterInterface;
 use Rasuvaeff\Yii3AbTesting\Assignment;
@@ -44,6 +46,7 @@ final class ClickHouseConversionTracker implements ConversionTracker, FlushableT
     public function __construct(
         private readonly ClickHouseWriterInterface $writer,
         private readonly int $autoFlushSize = 1000,
+        private readonly LoggerInterface $logger = new NullLogger(),
     ) {
         if ($autoFlushSize < 1) {
             throw new \InvalidArgumentException(sprintf('Auto-flush size must be at least 1, got %d', $autoFlushSize));
@@ -92,14 +95,34 @@ final class ClickHouseConversionTracker implements ConversionTracker, FlushableT
 
         try {
             $this->flush();
-        } catch (ClickHouseWriteException) {
+        } catch (ClickHouseWriteException $e) {
             // ClickHouse being down must not break the request: keep the events
             // and retry at the next threshold multiple, but cap memory by
             // dropping the oldest events beyond ten thresholds.
+            $bufferedEvents = \count($this->buffer);
+            $this->logger->warning(
+                message: 'Failed to auto-flush ClickHouse A/B testing tracker',
+                context: [
+                    'event' => 'flush_failed',
+                    'trackerKind' => 'conversion',
+                    'bufferedEvents' => $bufferedEvents,
+                    'exception' => $e,
+                ],
+            );
+
             $max = $this->autoFlushSize * 10;
 
-            if (\count($this->buffer) > $max) {
+            if ($bufferedEvents > $max) {
                 $this->buffer = \array_slice($this->buffer, -$max);
+                $this->logger->warning(
+                    message: 'Dropped ClickHouse A/B testing events after repeated flush failures',
+                    context: [
+                        'event' => 'dropped',
+                        'trackerKind' => 'conversion',
+                        'droppedEvents' => $bufferedEvents - $max,
+                        'bufferedEvents' => $max,
+                    ],
+                );
             }
         }
     }

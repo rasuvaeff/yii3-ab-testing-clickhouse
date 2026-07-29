@@ -25,7 +25,7 @@ final class SpyFlushableExposureTracker implements ExposureTracker, FlushableTra
     {
         ++$this->flushCalls;
 
-        if ($this->flushThrowable !== null) {
+        if ($this->flushThrowable instanceof \Throwable) {
             throw $this->flushThrowable;
         }
     }

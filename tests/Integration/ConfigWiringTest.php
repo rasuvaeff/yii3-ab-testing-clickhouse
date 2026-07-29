@@ -14,6 +14,7 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableExposureTracker;
+use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyLogger;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Test;
@@ -33,27 +34,37 @@ final class ConfigWiringTest
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ClickHouseTrackingFlushMiddleware::class];
-
-        Assert::instanceOf(
-            $factory(new SpyFlushableExposureTracker(), new SpyFlushableConversionTracker()),
-            ClickHouseTrackingFlushMiddleware::class,
+        $logger = new SpyLogger();
+        $middleware = $factory(
+            new SpyFlushableExposureTracker(),
+            new SpyFlushableConversionTracker(),
+            $logger,
         );
+
+        Assert::instanceOf($middleware, ClickHouseTrackingFlushMiddleware::class);
+        Assert::same($this->readLogger($middleware), $logger);
     }
 
     public function bindsClickHouseExposureTracker(): void
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ExposureTracker::class];
+        $logger = new SpyLogger();
+        $tracker = $factory($this->createClientFactory(), $logger);
 
-        Assert::instanceOf($factory($this->createClientFactory()), ClickHouseExposureTracker::class);
+        Assert::instanceOf($tracker, ClickHouseExposureTracker::class);
+        Assert::same($this->readLogger($tracker), $logger);
     }
 
     public function bindsClickHouseConversionTracker(): void
     {
         $definitions = $this->loadPackage();
         $factory = $definitions[ConversionTracker::class];
+        $logger = new SpyLogger();
+        $tracker = $factory($this->createClientFactory(), $logger);
 
-        Assert::instanceOf($factory($this->createClientFactory()), ClickHouseConversionTracker::class);
+        Assert::instanceOf($tracker, ClickHouseConversionTracker::class);
+        Assert::same($this->readLogger($tracker), $logger);
     }
 
     public function packageBindsOnlyTrackerAndMiddlewareKeys(): void
@@ -107,5 +118,14 @@ final class ConfigWiringTest
             streamFactory: new \GuzzleHttp\Psr7\HttpFactory(),
             uriFactory: new \GuzzleHttp\Psr7\HttpFactory(),
         );
+    }
+
+    private function readLogger(object $service): SpyLogger
+    {
+        $property = new \ReflectionProperty($service, 'logger');
+        $logger = $property->getValue($service);
+        Assert::instanceOf($logger, SpyLogger::class);
+
+        return $logger;
     }
 }

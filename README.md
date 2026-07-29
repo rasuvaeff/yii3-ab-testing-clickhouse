@@ -18,7 +18,7 @@ buffering events in memory and writing them to ClickHouse in batches.
 
 - PHP 8.3+
 - `rasuvaeff/yii3-ab-testing` ^1.2
-- `rasuvaeff/clickhouse-toolkit` ^1.1
+- `rasuvaeff/clickhouse-toolkit` ^1.6
 - a PSR-18 HTTP client (for example `guzzlehttp/guzzle`) for the ClickHouse connection
 
 ## Installation
@@ -34,8 +34,9 @@ interfaces from another adapter at the same time or `yiisoft/config` reports a
 core `CompositeExposureTracker` / `CompositeConversionTracker`.
 
 The DI factory pulls a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`
-from the container and uses it to build the batch writers. Bind the factory in
-your application:
+and `Psr\Log\LoggerInterface` from the container. It uses the factory to build
+the batch writers and sends delivery warnings to the logger. Bind both in your
+application (Yii applications normally already provide the logger):
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
@@ -122,9 +123,11 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 
 $exposure = new ClickHouseExposureTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
+    logger: $logger,
 );
 $conversion = new ClickHouseConversionTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS),
+    logger: $logger,
 );
 
 $ab = new AbTesting(
@@ -141,22 +144,33 @@ $ab->trackConversion($assignment, goal: 'purchase');
 
 ### Request-end flushing
 
-Tracking never makes a network call on `trackExposure()` or `trackConversion()`.
-Rows are appended to an in-memory buffer and written on `flush()`. The package
-ships `ClickHouseTrackingFlushMiddleware` for the recommended request-end flush:
+Rows are appended to an in-memory buffer. Reaching `autoFlushSize` (1000 by
+default) makes `trackExposure()` or `trackConversion()` attempt one batched
+network write; otherwise writing happens on `flush()`. Direct ClickHouse
+tracking is therefore a best-effort sink, not a durable queue. The package ships
+`ClickHouseTrackingFlushMiddleware` for the recommended request-end flush:
 
 ```php
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
 
 return [
+    // It must wrap every middleware/handler that can track an event.
     ClickHouseTrackingFlushMiddleware::class,
-    // place it late in the PSR-15 pipeline
 ];
 ```
 
 The middleware wraps the downstream handler in `try/finally`, flushes both
 trackers after the request, and swallows/logs flush failures so analytics never
-breaks the user response.
+breaks the user response. Register it outside (before, in pipelines whose first
+entry is outermost) all middleware and application code that can track events.
+
+Failed auto-flushes keep their events for retry and emit
+`Failed to auto-flush ClickHouse A/B testing tracker`. To bound worker memory,
+the buffer is capped at `10 * autoFlushSize`; dropping the oldest events emits
+`Dropped ClickHouse A/B testing events after repeated flush failures` with a
+`droppedEvents` count. Their structured `event` values are `flush_failed` and
+`dropped`. Monitor both warnings. Events still buffered when the process exits
+are lost.
 
 If you do not use a PSR-15 pipeline, call `flush()` yourself once at request end
 or from `register_shutdown_function()`.
@@ -176,8 +190,9 @@ or from `register_shutdown_function()`.
   column identifiers and uses parameterized inserts.
 - `subject_id` is stored verbatim and may be personally identifiable. Apply TTL /
   partition retention per your privacy policy.
-- Middleware swallows flush failures by design, so add logging/monitoring for
-  the warning message if analytics delivery matters operationally.
+- Auto-flush and middleware flush failures are swallowed by design. Monitor the
+  delivery and dropped-event warnings if analytics delivery matters
+  operationally; use the outbox adapter when durable delivery is required.
 
 ## Examples
 
@@ -191,6 +206,7 @@ composer build          # full gate: validate + normalize + cs + psalm + test
 composer cs:fix         # auto-fix code style
 composer psalm          # static analysis
 composer test           # run unit tests (integration tests skipped without CLICKHOUSE_HOST)
+vendor/bin/testo --suite=Integration # requires CLICKHOUSE_HOST; runs live in CI
 ```
 
 ## License

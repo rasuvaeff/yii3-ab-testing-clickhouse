@@ -203,9 +203,9 @@ final class FakePsrFactory
 
     public static function handler(ResponseInterface $response): RequestHandlerInterface
     {
-        return new class ($response) implements RequestHandlerInterface {
+        return new readonly class ($response) implements RequestHandlerInterface {
             public function __construct(
-                private readonly ResponseInterface $response,
+                private ResponseInterface $response,
             ) {}
 
             #[\Override]
@@ -218,9 +218,9 @@ final class FakePsrFactory
 
     public static function throwingHandler(\Throwable $throwable): RequestHandlerInterface
     {
-        return new class ($throwable) implements RequestHandlerInterface {
+        return new readonly class ($throwable) implements RequestHandlerInterface {
             public function __construct(
-                private readonly \Throwable $throwable,
+                private \Throwable $throwable,
             ) {}
 
             #[\Override]
