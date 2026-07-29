@@ -14,6 +14,9 @@ use Rasuvaeff\Yii3AbTesting\Assignment;
 use Rasuvaeff\Yii3AbTesting\AssignmentContext;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
+use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+use Rasuvaeff\Yii3AbTestingClickHouse\Tests\Support\FakePsrFactory;
+use Rasuvaeff\Yii3AbTestingClickHouse\Tests\Support\TrackingRequestHandler;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Lifecycle\BeforeTest;
@@ -30,7 +33,7 @@ final class ClickHouseIntegrationTest
 {
     private ClickHouseClientFactory $clientFactory;
 
-    private static function env(string $name, string $default): string
+    private function env(string $name, string $default): string
     {
         $value = getenv($name);
 
@@ -47,10 +50,10 @@ final class ClickHouseIntegrationTest
 
         $this->clientFactory = new ClickHouseClientFactory(new ClickHouseConfig(
             host: $host,
-            port: (int) self::env('CLICKHOUSE_PORT', '8123'),
-            database: self::env('CLICKHOUSE_DB', 'default'),
-            username: self::env('CLICKHOUSE_USER', 'default'),
-            password: self::env('CLICKHOUSE_PASSWORD', ''),
+            port: (int) $this->env('CLICKHOUSE_PORT', '8123'),
+            database: $this->env('CLICKHOUSE_DB', 'default'),
+            username: $this->env('CLICKHOUSE_USER', 'default'),
+            password: $this->env('CLICKHOUSE_PASSWORD', ''),
         ));
 
         $client = $this->clientFactory->create();
@@ -116,6 +119,41 @@ final class ClickHouseIntegrationTest
 
         Assert::same($this->countRows('ab_conversions'), 1);
         Assert::same($this->firstGoal(), 'purchase');
+    }
+
+    public function outerMiddlewareFlushesEventsTrackedByDownstreamHandler(): void
+    {
+        if (!isset($this->clientFactory)) {
+            return;
+        }
+
+        $exposureTracker = new ClickHouseExposureTracker(writer: new ClickHouseBatchWriter(
+            client: $this->clientFactory->create(),
+            table: 'ab_exposures',
+            columns: ClickHouseExposureTracker::COLUMNS,
+        ));
+        $conversionTracker = new ClickHouseConversionTracker(writer: new ClickHouseBatchWriter(
+            client: $this->clientFactory->create(),
+            table: 'ab_conversions',
+            columns: ClickHouseConversionTracker::COLUMNS,
+        ));
+        $response = FakePsrFactory::response();
+        $handler = new TrackingRequestHandler(
+            exposureTracker: $exposureTracker,
+            conversionTracker: $conversionTracker,
+            assignment: new Assignment(experiment: 'middleware-order', variant: 'control', subjectId: 'user-3'),
+            response: $response,
+        );
+        $middleware = new ClickHouseTrackingFlushMiddleware(
+            exposureTracker: $exposureTracker,
+            conversionTracker: $conversionTracker,
+        );
+
+        $actual = $middleware->process(FakePsrFactory::serverRequest(), $handler);
+
+        Assert::same($actual, $response);
+        Assert::same($this->countRows('ab_exposures'), 1);
+        Assert::same($this->countRows('ab_conversions'), 1);
     }
 
     private function countRows(string $table): int

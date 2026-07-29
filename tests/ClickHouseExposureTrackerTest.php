@@ -135,12 +135,22 @@ final class ClickHouseExposureTrackerTest
     public function failedAutoFlushDoesNotThrowAndKeepsEvents(): void
     {
         $failing = new FailingWriter();
-        $tracker = new ClickHouseExposureTracker(writer: $failing, autoFlushSize: 2);
+        $logger = new SpyLogger();
+        $tracker = new ClickHouseExposureTracker(writer: $failing, autoFlushSize: 2, logger: $logger);
 
         $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
         $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'b', subjectId: 'u2'));
 
         Assert::same($failing->writeCalls, 1);
+        Assert::count($logger->warnings, 1);
+        Assert::same($logger->warnings[0]['message'], 'Failed to auto-flush ClickHouse A/B testing tracker');
+        Assert::same($logger->warnings[0]['context']['event'], 'flush_failed');
+        Assert::same($logger->warnings[0]['context']['trackerKind'], 'exposure');
+        Assert::same($logger->warnings[0]['context']['bufferedEvents'], 2);
+        Assert::instanceOf(
+            $logger->warnings[0]['context']['exception'],
+            \Rasuvaeff\ClickHouseToolkit\ClickHouseWriteException::class,
+        );
 
         try {
             $tracker->flush();
@@ -165,7 +175,8 @@ final class ClickHouseExposureTrackerTest
     public function bufferIsCappedAtTenThresholdsWhenWritesKeepFailing(): void
     {
         $flaky = new FlakyWriter();
-        $tracker = new ClickHouseExposureTracker(writer: $flaky, autoFlushSize: 1);
+        $logger = new SpyLogger();
+        $tracker = new ClickHouseExposureTracker(writer: $flaky, autoFlushSize: 1, logger: $logger);
 
         for ($i = 1; $i <= 15; ++$i) {
             $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: (string) $i));
@@ -177,6 +188,17 @@ final class ClickHouseExposureTrackerTest
         Assert::count($flaky->rows, 10);
         Assert::same($flaky->rows[0]['subject_id'], '6');
         Assert::same($flaky->rows[9]['subject_id'], '15');
+        Assert::count($logger->warnings, 20);
+        Assert::same(
+            $logger->warnings[19]['message'],
+            'Dropped ClickHouse A/B testing events after repeated flush failures',
+        );
+        Assert::same($logger->warnings[19]['context'], [
+            'event' => 'dropped',
+            'trackerKind' => 'exposure',
+            'droppedEvents' => 1,
+            'bufferedEvents' => 10,
+        ]);
     }
 
     public function throwsOnNonPositiveAutoFlushSize(): void

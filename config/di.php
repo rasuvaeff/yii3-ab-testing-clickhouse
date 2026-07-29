@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Psr\Log\LoggerInterface;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\Yii3AbTesting\ConversionTracker;
@@ -16,13 +17,18 @@ return [
     ClickHouseTrackingFlushMiddleware::class => static function (
         ExposureTracker $exposureTracker,
         ConversionTracker $conversionTracker,
+        LoggerInterface $logger,
     ): ClickHouseTrackingFlushMiddleware {
         return new ClickHouseTrackingFlushMiddleware(
             exposureTracker: $exposureTracker,
             conversionTracker: $conversionTracker,
+            logger: $logger,
         );
     },
-    ExposureTracker::class => static function (ClickHouseClientFactory $clickHouseClientFactory) use ($params): ExposureTracker {
+    ExposureTracker::class => static function (
+        ClickHouseClientFactory $clickHouseClientFactory,
+        LoggerInterface $logger,
+    ) use ($params): ExposureTracker {
         $config = $params['rasuvaeff/yii3-ab-testing-clickhouse'] ?? [];
 
         return new ClickHouseExposureTracker(
@@ -33,9 +39,13 @@ return [
                 batchSize: $config['batchSize'] ?? 1000,
             ),
             autoFlushSize: $config['autoFlushSize'] ?? 1000,
+            logger: $logger,
         );
     },
-    ConversionTracker::class => static function (ClickHouseClientFactory $clickHouseClientFactory) use ($params): ConversionTracker {
+    ConversionTracker::class => static function (
+        ClickHouseClientFactory $clickHouseClientFactory,
+        LoggerInterface $logger,
+    ) use ($params): ConversionTracker {
         $config = $params['rasuvaeff/yii3-ab-testing-clickhouse'] ?? [];
 
         return new ClickHouseConversionTracker(
@@ -46,6 +56,7 @@ return [
                 batchSize: $config['batchSize'] ?? 1000,
             ),
             autoFlushSize: $config['autoFlushSize'] ?? 1000,
+            logger: $logger,
         );
     },
 ];

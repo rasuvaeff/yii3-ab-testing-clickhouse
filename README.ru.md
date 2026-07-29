@@ -19,7 +19,7 @@
 
 - PHP 8.3+
 - `rasuvaeff/yii3-ab-testing` ^1.2
-- `rasuvaeff/clickhouse-toolkit` ^1.1
+- `rasuvaeff/clickhouse-toolkit` ^1.6
 - PSR-18 HTTP-клиент (например `guzzlehttp/guzzle`) для подключения к ClickHouse
 
 ## Установка
@@ -36,8 +36,10 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 `CompositeConversionTracker`.
 
 DI-фабрика достаёт из контейнера
-`Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` и использует его для
-создания пакетных писателей. Зарегистрируйте фабрику в приложении:
+`Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` и
+`Psr\Log\LoggerInterface`. Фабрика создаёт пакетных писателей, а logger получает
+предупреждения о доставке. Зарегистрируйте обе зависимости в приложении (в Yii
+logger обычно уже зарегистрирован):
 
 ```php
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
@@ -125,9 +127,11 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 
 $exposure = new ClickHouseExposureTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
+    logger: $logger,
 );
 $conversion = new ClickHouseConversionTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS),
+    logger: $logger,
 );
 
 $ab = new AbTesting(
@@ -144,23 +148,35 @@ $ab->trackConversion($assignment, goal: 'purchase');
 
 ### Сброс в конце запроса
 
-Трекинг никогда не делает сетевого вызова в `trackExposure()` или
-`trackConversion()`. Строки накапливаются в in-memory буфере и записываются на
-`flush()`. Пакет содержит `ClickHouseTrackingFlushMiddleware` для рекомендуемого
-сброса в конце запроса:
+Строки накапливаются в in-memory буфере. При достижении `autoFlushSize` (по
+умолчанию 1000) вызов `trackExposure()` или `trackConversion()` пытается
+выполнить одну пакетную сетевую запись; в остальных случаях запись происходит
+на `flush()`. Поэтому прямой ClickHouse-трекинг — best-effort приёмник, а не
+надёжная очередь. Пакет содержит `ClickHouseTrackingFlushMiddleware` для
+рекомендуемого сброса в конце запроса:
 
 ```php
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
 
 return [
+    // Должно оборачивать все middleware/handler'ы, способные записать событие.
     ClickHouseTrackingFlushMiddleware::class,
-    // place it late in the PSR-15 pipeline
 ];
 ```
 
 Middleware оборачивает downstream-обработчик в `try/finally`, сбрасывает оба
 трекера после запроса и проглатывает/логирует ошибки сброса, чтобы аналитика
-никогда не ломала ответ пользователю.
+никогда не ломала ответ пользователю. Зарегистрируйте его снаружи (раньше всех
+таких обработчиков, если первый элемент pipeline является внешним) относительно
+всех middleware и кода приложения, способных записать событие.
+
+Неудачный auto-flush сохраняет события для повтора и пишет warning
+`Failed to auto-flush ClickHouse A/B testing tracker`. Чтобы ограничить память
+worker'а, буфер ограничен `10 * autoFlushSize`; при удалении старейших событий
+пишется `Dropped ClickHouse A/B testing events after repeated flush failures` с
+числом `droppedEvents`. Их структурированные значения `event` — `flush_failed`
+и `dropped`. Отслеживайте оба warning. События, оставшиеся в буфере к моменту
+завершения процесса, теряются.
 
 Если вы не используете PSR-15 pipeline, вызывайте `flush()` сами — один раз в
 конце запроса или из `register_shutdown_function()`.
@@ -181,9 +197,9 @@ Middleware оборачивает downstream-обработчик в `try/finall
 - `subject_id` хранится как есть и может содержать персональные данные.
   Настройте TTL / партиционную политику удержания в соответствии с вашей
   privacy-политикой.
-- Middleware намеренно проглатывает ошибки сброса — добавьте логирование /
-  мониторинг для warning-сообщения, если доставка аналитики критична
-  операционно.
+- Ошибки auto-flush и middleware flush намеренно проглатываются. Отслеживайте
+  предупреждения об ошибках доставки и отброшенных событиях; если нужна
+  гарантированная доставка, используйте outbox-адаптер.
 
 ## Примеры
 
@@ -197,6 +213,7 @@ composer build          # full gate: validate + normalize + cs + psalm + test
 composer cs:fix         # auto-fix code style
 composer psalm          # static analysis
 composer test           # run unit tests (integration tests skipped without CLICKHOUSE_HOST)
+vendor/bin/testo --suite=Integration # требует CLICKHOUSE_HOST; в CI запускается с живым ClickHouse
 ```
 
 ## Лицензия

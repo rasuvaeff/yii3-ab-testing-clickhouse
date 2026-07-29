@@ -28,12 +28,12 @@ source owns each (compose several sinks with the core `Composite*Tracker`).
 1. **Verification is mandatory.** Never claim "done" without a fresh green
    `composer build`. "Should work" does not count.
 2. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
-3. **Tracking never blocks or breaks the request.** Trackers append to an
-   in-memory buffer; writes happen on `flush()` (middleware / shutdown) or
-   amortized via auto-flush at `autoFlushSize` multiples. Never write per event,
-   and a failed auto-flush or middleware flush must never throw into the
-   request. Keep events on failed tracker flush; log and swallow middleware
-   flush failures.
+3. **Tracking failures never break the request.** Trackers append to an in-memory
+   buffer; writes happen on `flush()` (middleware / shutdown) or amortized via
+   auto-flush at `autoFlushSize` multiples. A threshold event can therefore make
+   a network call, but a failed auto-flush or middleware flush must never throw
+   into the request. Keep events on failed writes, and log both delivery failures
+   and any events dropped at the buffer cap.
 4. **Preserve the public contract.** A tracker's `COLUMNS` constant must match
    the columns of the `ClickHouseBatchWriter` it is given and the table DDL in
    `migrations/`. Update README + tests with any API change.
@@ -86,18 +86,23 @@ make release-check
   tests use in-memory writers and spies — no server needed for `composer build`.
 - `flush()` writes the buffer then clears it; an empty buffer writes nothing; a
   failed explicit tracker write keeps the buffer (caller may retry).
+- Tracker auto-flush errors and cap-driven event loss are separate PSR-3 warning
+  signals. Keep their stable `event` values (`flush_failed` / `dropped`),
+  `trackerKind`, counts, and the original exception in structured context; DI
+  must pass the application logger to both trackers.
 - Boolean flags are written as `UInt8` (`0`/`1`); `environment` defaults to `''`
   when no `AssignmentContext` is present. `ts` is not written — the table fills it
   with `DEFAULT now()`.
 - `ClickHouseTrackingFlushMiddleware` must wrap the handler in `try/finally` and
   swallow/log tracker flush errors, otherwise analytics can break user traffic.
 - Integration test (`tests/Integration/ClickHouseIntegrationTest`) is skipped
-  unless `CLICKHOUSE_HOST` is set; it applies `migrations/` via
-  `ClickHouseMigrationRunner`. The app must register a `ClickHouseClientFactory` in DI.
+  locally unless `CLICKHOUSE_HOST` is set; CI always supplies a live ClickHouse
+  service. It applies `migrations/` via `ClickHouseMigrationRunner`. The app must
+  register a `ClickHouseClientFactory` and `LoggerInterface` in DI.
 - **Any change to `migrations/` must be verified with the Integration suite
-  actually running**, not just `composer build`. The suite skips without
-  `CLICKHOUSE_HOST`, so CI is green regardless — 1.1.0 shipped with this very
-  test broken by the placeholder change and 1.1.1 fixed it:
+  actually running**, not just `composer build`. Before the live CI job existed,
+  1.1.0 shipped with this test broken by the placeholder change and 1.1.1 fixed
+  it:
 
   ```bash
   docker run -d --name ch-abtest -p 8124:8123 -e CLICKHOUSE_PASSWORD=ch_test clickhouse/clickhouse-server:24.8
@@ -110,6 +115,6 @@ make release-check
 
 ## When you finish
 
-- Update `README.md` (and `examples/` if usage changed); update `CHANGELOG.md`
-  when releasing.
+- Update `README.md` and `README.ru.md` together (and `examples/` if usage
+  changed); update `CHANGELOG.md` when releasing.
 - Re-run `composer build` and paste the output.

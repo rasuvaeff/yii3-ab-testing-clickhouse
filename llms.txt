@@ -9,14 +9,15 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 ## Rules
 
 - Implements `Rasuvaeff\Yii3AbTesting\ExposureTracker` and `ConversionTracker`.
-- Buffers events in memory; `trackExposure()` / `trackConversion()` never write to the network.
+- Buffers events in memory. At `autoFlushSize` (default 1000), `trackExposure()` / `trackConversion()` attempt a batched network write; other writes happen on explicit `flush()`.
 - One batched ClickHouse insert happens per `flush()`. `flush()` writes then clears the buffer; a failed write keeps the buffer.
-- `ClickHouseTrackingFlushMiddleware` is the recommended request-end integration: it flushes both trackers in `finally` and swallows/logs flush failures.
+- Direct ClickHouse tracking is best effort, not durable. Inject a `LoggerInterface`, monitor delivery/drop warnings, and use the outbox adapter when durable delivery is required.
+- `ClickHouseTrackingFlushMiddleware` is the recommended request-end integration: place it outside every middleware/handler that tracks events. It flushes both trackers in `finally` and swallows/logs flush failures.
 - Built on `rasuvaeff/clickhouse-toolkit` `ClickHouseBatchWriter`; trackers take a `ClickHouseWriterInterface`.
 - Booleans stored as `UInt8` (`0`/`1`); `environment` defaults to `''`; `ts` filled server-side by `DEFAULT now()`.
 - A tracker's `COLUMNS` constant must match its writer's columns and the table DDL.
-- Trackers implement `FlushableTracker` (core ^1.2); auto-flush writes the buffer once it reaches `autoFlushSize` (default 1000). A failed auto-flush never throws; events are kept (capped at 10 × autoFlushSize, oldest dropped).
-- Binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` in `config/di.php`. The app must register a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory`.
+- Trackers implement `FlushableTracker` (core ^1.2); a failed auto-flush never throws and logs `Failed to auto-flush ClickHouse A/B testing tracker` with `event=flush_failed`. Events are kept up to 10 × autoFlushSize; dropping oldest events logs `Dropped ClickHouse A/B testing events after repeated flush failures` with `event=dropped` and `droppedEvents`. Buffered events are lost if the process exits.
+- Binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` in `config/di.php`. The app must register a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` and `Psr\Log\LoggerInterface`; the logger is passed to all three services.
 - Schema ships as `migrations/*.sql`, applied by the toolkit's `ClickHouseMigrationRunner`.
 - Table names in that DDL are `{{exposures_table}}` / `{{conversions_table}}` placeholders (since 1.1), resolved by the runner BEFORE it hashes the file. Pass them via the runner's `placeholders:` argument, or via `'rasuvaeff/yii3-clickhouse-toolkit' => ['migrationPlaceholders' => [...]]` when wired through params — the writer's `exposuresTable`/`conversionsTable` params do NOT reach the DDL. Renaming after a migration was applied surfaces as a checksum divergence.
 
@@ -37,6 +38,7 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 
 $tracker = new ClickHouseExposureTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
+    logger: $logger,
 );
 
 $tracker->trackExposure($assignment); // buffered
@@ -51,6 +53,7 @@ use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 
 $tracker = new ClickHouseConversionTracker(
     writer: new ClickHouseBatchWriter($client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS),
+    logger: $logger,
 );
 
 $tracker->trackConversion($assignment, goal: 'purchase');
@@ -63,6 +66,7 @@ $tracker->flush();
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
 
 return [
+    // Must wrap all middleware/handlers that can track an event.
     ClickHouseTrackingFlushMiddleware::class,
 ];
 ```

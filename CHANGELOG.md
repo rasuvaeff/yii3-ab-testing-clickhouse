@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.1.2 — 2026-07-29
+
+- Failed tracker auto-flushes now emit a PSR-3 warning with the tracker kind,
+  buffered count, and write exception. Buffer-cap event loss emits a separate
+  warning with the dropped count. The config-plugin passes the application's
+  `LoggerInterface` to the middleware and both trackers.
+- Correct the delivery contract: reaching `autoFlushSize` may perform a network
+  call during `trackExposure()` / `trackConversion()`, and direct ClickHouse
+  delivery is best effort. Document the required outer middleware position.
+- Run the Integration suite against a live ClickHouse service in CI so schema,
+  migration, and write/read regressions can no longer pass via a skipped suite.
+
 ## 1.1.1 — 2026-07-25
 
 - Fix `tests/Integration/ClickHouseIntegrationTest`: it built the migration
@@ -49,4 +61,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built on `rasuvaeff/clickhouse-toolkit` `ClickHouseBatchWriter`; tracking never blocks the request.
 - `migrations/` — ClickHouse DDL for `ab_exposures` and `ab_conversions` (MergeTree, monthly partitions), applied by the toolkit's `ClickHouseMigrationRunner`.
 - Yii3 config-plugin: binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` from `config/di.php`; table names and batch size in `config/params.php`.
-

@@ -63,6 +63,6 @@ final class MigrationPlaceholderTest
         $contents = file_get_contents(self::MIGRATIONS_DIR . '/' . $file);
         Assert::true($contents !== false);
 
-        return (string) $contents;
+        return $contents;
     }
 }
