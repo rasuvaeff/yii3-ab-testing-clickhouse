@@ -122,6 +122,75 @@ final class ClickHouseExposureTrackerTest
         Assert::count($this->writer->rows, 2);
     }
 
+    public function observerReceivesBufferedAndWrittenSignals(): void
+    {
+        $observer = new RecordingObserver();
+        $tracker = new ClickHouseExposureTracker(writer: $this->writer, observer: $observer);
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
+        $tracker->flush();
+
+        Assert::same($observer->signals, [
+            ['signal' => 'buffered', 'trackerKind' => 'exposure', 'count' => 1],
+            ['signal' => 'written', 'trackerKind' => 'exposure', 'count' => 1],
+        ]);
+    }
+
+    public function observerReceivesFailureAndDropSignals(): void
+    {
+        $observer = new RecordingObserver();
+        $flaky = new FlakyWriter();
+        $tracker = new ClickHouseExposureTracker(
+            writer: $flaky,
+            autoFlushSize: 1,
+            observer: $observer,
+        );
+
+        for ($i = 1; $i <= 11; ++$i) {
+            $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: (string) $i));
+        }
+
+        $last = $observer->signals[array_key_last($observer->signals)];
+        Assert::same($last, [
+            'signal' => 'dropped',
+            'trackerKind' => 'exposure',
+            'count' => 1,
+            'bufferedEvents' => 10,
+        ]);
+        Assert::same($observer->signals[1]['signal'], 'flush_failed');
+        Assert::instanceOf($observer->signals[1]['exception'], \Throwable::class);
+    }
+
+    public function writesTheSameBatchToAnOptInSecondarySink(): void
+    {
+        $secondary = new RecordingBatchSink();
+        $tracker = new ClickHouseExposureTracker(writer: $this->writer, secondarySink: $secondary);
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
+        $tracker->flush();
+
+        Assert::same($secondary->rows, $this->writer->rows);
+    }
+
+    public function secondarySinkAutoFlushFailureDoesNotBreakRequest(): void
+    {
+        $logger = new SpyLogger();
+        $observer = new RecordingObserver();
+        $tracker = new ClickHouseExposureTracker(
+            writer: $this->writer,
+            autoFlushSize: 1,
+            logger: $logger,
+            observer: $observer,
+            secondarySink: new ThrowingBatchSink(),
+        );
+
+        $tracker->trackExposure(new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'));
+
+        Assert::same($logger->warnings[0]['context']['event'], 'flush_failed');
+        Assert::same($observer->signals[1]['signal'], 'flush_failed');
+        Assert::same($observer->signals[1]['trackerKind'], 'exposure');
+    }
+
     public function autoFlushesAtTheDefaultThresholdOfOneThousand(): void
     {
         for ($i = 1; $i <= 1000; ++$i) {

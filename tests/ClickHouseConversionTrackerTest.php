@@ -133,6 +133,23 @@ final class ClickHouseConversionTrackerTest
         Assert::count($this->writer->rows, 2);
     }
 
+    public function observerReceivesConversionSignals(): void
+    {
+        $observer = new RecordingObserver();
+        $tracker = new ClickHouseConversionTracker(writer: $this->writer, observer: $observer);
+
+        $tracker->trackConversion(
+            new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1'),
+            goal: 'purchase',
+        );
+        $tracker->flush();
+
+        Assert::same($observer->signals, [
+            ['signal' => 'buffered', 'trackerKind' => 'conversion', 'count' => 1],
+            ['signal' => 'written', 'trackerKind' => 'conversion', 'count' => 1],
+        ]);
+    }
+
     public function autoFlushesAtTheDefaultThresholdOfOneThousand(): void
     {
         $assignment = new Assignment(experiment: 'exp', variant: 'a', subjectId: 'u1');
