@@ -113,6 +113,16 @@ yourself (the DDL is in `migrations/`), or drop the file's row from the
 
 Both are `MergeTree` partitioned by `toYYYYMM(ts)`; `ts` defaults to `now()`.
 
+### Retention
+
+Opt-in TTL templates for schema v1 live in `retention/`. They are deliberately
+not migrations: installing or upgrading the package must never start deleting
+analytics data. Resolve `{{exposures_table}}` / `{{conversions_table}}` and a
+positive integer `{{retention_days}}`, review the SQL, then apply it through
+your deployment process. The matching `disable_*_ttl.sql` templates remove the
+policy without dropping existing rows. Changing the number of days is an
+ordinary `MODIFY TTL` operation; ClickHouse applies it asynchronously.
+
 ## Usage
 
 ```php
@@ -172,6 +182,18 @@ the buffer is capped at `10 * autoFlushSize`; dropping the oldest events emits
 `dropped`. Monitor both warnings. Events still buffered when the process exits
 are lost.
 
+For metrics and traces, implement `TrackingObserverInterface` and bind it in DI.
+It reports `buffered`, `written`, `flushFailed`, and `dropped` with the tracker
+kind and event counts. Keep labels low-cardinality and never throw from an
+observer. The default `NullTrackingObserver` has no overhead beyond the method
+call. The PSR-3 warnings remain available independently.
+
+The buffering code writes through an internal `TrackingBatchSinkInterface`.
+Trackers accept an optional `secondarySink` for controlled dual-write rollout;
+the package DI does not configure one and schema v2 is not shipped or enabled.
+If a secondary write fails after the primary succeeded, the retained batch is
+retried as a whole, so every target must tolerate at-least-once delivery.
+
 If you do not use a PSR-15 pipeline, call `flush()` yourself once at request end
 or from `register_shutdown_function()`.
 
@@ -182,6 +204,7 @@ or from `register_shutdown_function()`.
 | `ClickHouseExposureTracker` | Buffers exposures; `flush()` batch-writes to `ab_exposures` |
 | `ClickHouseConversionTracker` | Buffers conversions (with `goal`); `flush()` batch-writes to `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware that flushes both trackers safely at request end |
+| `TrackingObserverInterface` | Lifecycle metrics/tracing signals for buffered, written, failed, and dropped events |
 
 ## Security
 

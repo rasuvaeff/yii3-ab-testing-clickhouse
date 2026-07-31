@@ -43,14 +43,23 @@ final class ClickHouseExposureTracker implements ExposureTracker, FlushableTrack
      */
     private array $buffer = [];
 
+    private readonly TrackingBatchSinkInterface $sink;
+
     public function __construct(
-        private readonly ClickHouseWriterInterface $writer,
+        ClickHouseWriterInterface $writer,
         private readonly int $autoFlushSize = 1000,
         private readonly LoggerInterface $logger = new NullLogger(),
+        private readonly TrackingObserverInterface $observer = new NullTrackingObserver(),
+        ?TrackingBatchSinkInterface $secondarySink = null,
     ) {
         if ($autoFlushSize < 1) {
             throw new \InvalidArgumentException(sprintf('Auto-flush size must be at least 1, got %d', $autoFlushSize));
         }
+
+        $primarySink = new ClickHouseWriterSink($writer);
+        $this->sink = $secondarySink instanceof TrackingBatchSinkInterface
+            ? new CompositeTrackingBatchSink([$primarySink, $secondarySink])
+            : $primarySink;
     }
 
     #[\Override]
@@ -65,6 +74,7 @@ final class ClickHouseExposureTracker implements ExposureTracker, FlushableTrack
             'is_sticky' => (int) $assignment->isSticky,
             'environment' => $assignment->context?->getEnvironment() ?? '',
         ];
+        $this->observer->buffered('exposure', \count($this->buffer));
 
         $this->autoFlush();
     }
@@ -82,8 +92,18 @@ final class ClickHouseExposureTracker implements ExposureTracker, FlushableTrack
             return;
         }
 
-        $this->writer->write($this->buffer);
+        $writtenEvents = \count($this->buffer);
+
+        try {
+            $this->sink->write($this->buffer);
+        } catch (\Throwable $e) {
+            $this->observer->flushFailed('exposure', $writtenEvents, $e);
+
+            throw $e;
+        }
+
         $this->buffer = [];
+        $this->observer->written('exposure', $writtenEvents);
     }
 
     private function autoFlush(): void
@@ -94,8 +114,8 @@ final class ClickHouseExposureTracker implements ExposureTracker, FlushableTrack
 
         try {
             $this->flush();
-        } catch (ClickHouseWriteException $e) {
-            // ClickHouse being down must not break the request: keep the events
+        } catch (\Throwable $e) {
+            // A primary or opt-in secondary sink failure must not break the request: keep the events
             // and retry at the next threshold multiple, but cap memory by
             // dropping the oldest events beyond ten thresholds.
             $bufferedEvents = \count($this->buffer);
@@ -112,13 +132,15 @@ final class ClickHouseExposureTracker implements ExposureTracker, FlushableTrack
             $max = $this->autoFlushSize * 10;
 
             if ($bufferedEvents > $max) {
+                $droppedEvents = $bufferedEvents - $max;
                 $this->buffer = \array_slice($this->buffer, -$max);
+                $this->observer->dropped('exposure', $droppedEvents, $max);
                 $this->logger->warning(
                     message: 'Dropped ClickHouse A/B testing events after repeated flush failures',
                     context: [
                         'event' => 'dropped',
                         'trackerKind' => 'exposure',
-                        'droppedEvents' => $bufferedEvents - $max,
+                        'droppedEvents' => $droppedEvents,
                         'bufferedEvents' => $max,
                     ],
                 );

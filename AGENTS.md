@@ -12,7 +12,7 @@ explicit `flush()`, built on `rasuvaeff/clickhouse-toolkit`
 Namespace: `Rasuvaeff\Yii3AbTestingClickHouse`.
 
 Public API: `ClickHouseExposureTracker`, `ClickHouseConversionTracker`,
-`ClickHouseTrackingFlushMiddleware`. The trackers implement core's
+`ClickHouseTrackingFlushMiddleware`, `TrackingObserverInterface`. The trackers implement core's
 `FlushableTracker`, expose a `COLUMNS` constant, and have configurable
 `autoFlushSize`. Schema ships as ClickHouse `*.sql` files under `migrations/`,
 applied by the toolkit's `ClickHouseMigrationRunner`.
@@ -90,6 +90,13 @@ make release-check
   signals. Keep their stable `event` values (`flush_failed` / `dropped`),
   `trackerKind`, counts, and the original exception in structured context; DI
   must pass the application logger to both trackers.
+- Observer signals are additive to logs: every append reports `buffered`, every
+  successful batch reports `written`, failures report `flushFailed`, and cap
+  loss reports `dropped`. Observers must not throw or use subject/experiment as
+  metric labels.
+- `retention/` is opt-in deployment SQL, never part of automatic migrations.
+  Do not enable deletion on package upgrade. Schema v2 remains disabled; the
+  internal secondary sink is only a dual-write readiness boundary.
 - Boolean flags are written as `UInt8` (`0`/`1`); `environment` defaults to `''`
   when no `AssignmentContext` is present. `ts` is not written — the table fills it
   with `DEFAULT now()`.

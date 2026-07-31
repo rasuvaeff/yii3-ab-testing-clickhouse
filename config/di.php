@@ -10,10 +10,13 @@ use Rasuvaeff\Yii3AbTesting\ExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+use Rasuvaeff\Yii3AbTestingClickHouse\NullTrackingObserver;
+use Rasuvaeff\Yii3AbTestingClickHouse\TrackingObserverInterface;
 
 /** @var array $params */
 
 return [
+    TrackingObserverInterface::class => static fn (): TrackingObserverInterface => new NullTrackingObserver(),
     ClickHouseTrackingFlushMiddleware::class => static function (
         ExposureTracker $exposureTracker,
         ConversionTracker $conversionTracker,
@@ -28,6 +31,7 @@ return [
     ExposureTracker::class => static function (
         ClickHouseClientFactory $clickHouseClientFactory,
         LoggerInterface $logger,
+        TrackingObserverInterface $observer,
     ) use ($params): ExposureTracker {
         $config = $params['rasuvaeff/yii3-ab-testing-clickhouse'] ?? [];
 
@@ -40,11 +44,13 @@ return [
             ),
             autoFlushSize: $config['autoFlushSize'] ?? 1000,
             logger: $logger,
+            observer: $observer,
         );
     },
     ConversionTracker::class => static function (
         ClickHouseClientFactory $clickHouseClientFactory,
         LoggerInterface $logger,
+        TrackingObserverInterface $observer,
     ) use ($params): ConversionTracker {
         $config = $params['rasuvaeff/yii3-ab-testing-clickhouse'] ?? [];
 
@@ -57,6 +63,7 @@ return [
             ),
             autoFlushSize: $config['autoFlushSize'] ?? 1000,
             logger: $logger,
+            observer: $observer,
         );
     },
 ];

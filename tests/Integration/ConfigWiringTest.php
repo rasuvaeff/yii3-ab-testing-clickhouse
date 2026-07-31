@@ -12,9 +12,11 @@ use Rasuvaeff\Yii3AbTesting\ExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+use Rasuvaeff\Yii3AbTestingClickHouse\NullTrackingObserver;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableConversionTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyFlushableExposureTracker;
 use Rasuvaeff\Yii3AbTestingClickHouse\Tests\SpyLogger;
+use Rasuvaeff\Yii3AbTestingClickHouse\TrackingObserverInterface;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Test;
@@ -50,10 +52,12 @@ final class ConfigWiringTest
         $definitions = $this->loadPackage();
         $factory = $definitions[ExposureTracker::class];
         $logger = new SpyLogger();
-        $tracker = $factory($this->createClientFactory(), $logger);
+        $observer = new NullTrackingObserver();
+        $tracker = $factory($this->createClientFactory(), $logger, $observer);
 
         Assert::instanceOf($tracker, ClickHouseExposureTracker::class);
         Assert::same($this->readLogger($tracker), $logger);
+        Assert::same($this->readObserver($tracker), $observer);
     }
 
     public function bindsClickHouseConversionTracker(): void
@@ -61,17 +65,19 @@ final class ConfigWiringTest
         $definitions = $this->loadPackage();
         $factory = $definitions[ConversionTracker::class];
         $logger = new SpyLogger();
-        $tracker = $factory($this->createClientFactory(), $logger);
+        $observer = new NullTrackingObserver();
+        $tracker = $factory($this->createClientFactory(), $logger, $observer);
 
         Assert::instanceOf($tracker, ClickHouseConversionTracker::class);
         Assert::same($this->readLogger($tracker), $logger);
+        Assert::same($this->readObserver($tracker), $observer);
     }
 
-    public function packageBindsOnlyTrackerAndMiddlewareKeys(): void
+    public function packageBindsObserverTrackerAndMiddlewareKeys(): void
     {
         Assert::same(
             array_keys($this->loadPackage()),
-            [ClickHouseTrackingFlushMiddleware::class, ExposureTracker::class, ConversionTracker::class],
+            [TrackingObserverInterface::class, ClickHouseTrackingFlushMiddleware::class, ExposureTracker::class, ConversionTracker::class],
         );
     }
 
@@ -127,5 +133,14 @@ final class ConfigWiringTest
         Assert::instanceOf($logger, SpyLogger::class);
 
         return $logger;
+    }
+
+    private function readObserver(object $service): TrackingObserverInterface
+    {
+        $property = new \ReflectionProperty($service, 'observer');
+        $observer = $property->getValue($service);
+        Assert::instanceOf($observer, TrackingObserverInterface::class);
+
+        return $observer;
     }
 }

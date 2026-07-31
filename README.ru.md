@@ -117,6 +117,16 @@ return [
 Обе таблицы — `MergeTree` с партицированием по `toYYYYMM(ts)`; `ts` по умолчанию
 равно `now()`.
 
+### Retention
+
+Opt-in TTL-шаблоны для schema v1 лежат в `retention/`. Они намеренно не являются
+миграциями: установка или обновление пакета не должны автоматически начинать
+удаление аналитических данных. Подставьте `{{exposures_table}}` /
+`{{conversions_table}}` и положительное целое `{{retention_days}}`, проверьте SQL
+и примените его своим deployment-процессом. Парные `disable_*_ttl.sql` удаляют
+политику, не удаляя уже сохранённые строки. Смена срока выполняется обычным
+`MODIFY TTL`; ClickHouse применяет её асинхронно.
+
 ## Использование
 
 ```php
@@ -178,6 +188,18 @@ worker'а, буфер ограничен `10 * autoFlushSize`; при удале
 и `dropped`. Отслеживайте оба warning. События, оставшиеся в буфере к моменту
 завершения процесса, теряются.
 
+Для метрик и трассировки реализуйте `TrackingObserverInterface` и привяжите его
+в DI. Он сообщает `buffered`, `written`, `flushFailed` и `dropped` с типом
+tracker'а и счётчиками событий. Метки должны быть низкокардинальными, observer не
+должен бросать исключения. По умолчанию используется `NullTrackingObserver`;
+PSR-3 warnings продолжают работать независимо.
+
+Буфер пишет через внутренний `TrackingBatchSinkInterface`. Tracker'ы принимают
+необязательный `secondarySink` для контролируемого dual-write; пакетный DI его
+не настраивает, schema v2 не поставляется и не включается. Если secondary write
+упал после успешного primary write, весь сохранённый batch будет повторён,
+поэтому каждый target обязан выдерживать at-least-once delivery.
+
 Если вы не используете PSR-15 pipeline, вызывайте `flush()` сами — один раз в
 конце запроса или из `register_shutdown_function()`.
 
@@ -188,6 +210,7 @@ worker'а, буфер ограничен `10 * autoFlushSize`; при удале
 | `ClickHouseExposureTracker` | Буферизует показы; `flush()` пакетно пишет в `ab_exposures` |
 | `ClickHouseConversionTracker` | Буферизует конверсии (с `goal`); `flush()` пакетно пишет в `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware, безопасно сбрасывающее оба трекера в конце запроса |
+| `TrackingObserverInterface` | Сигналы метрик/трассировки для buffered, written, failed и dropped событий |
 
 ## Безопасность
 

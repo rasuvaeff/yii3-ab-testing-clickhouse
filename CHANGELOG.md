@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.0 — 2026-08-01
+
+- Add `TrackingObserverInterface` signals for buffered, written, failed flush,
+  and dropped events, with a null default wired through config-plugin.
+- Add opt-in schema-v1 retention/TTL templates with explicit enable and disable
+  operations; upgrades do not activate data deletion.
+- Replace constructor-only benchmarks with append, threshold-flush, and
+  large-buffer workloads.
+- Route writes through a fan-out-capable internal batch sink and expose an
+  opt-in secondary sink without shipping or enabling schema v2.
+
 ## 1.1.2 — 2026-07-29
 
 - Failed tracker auto-flushes now emit a PSR-3 warning with the tracker kind,
