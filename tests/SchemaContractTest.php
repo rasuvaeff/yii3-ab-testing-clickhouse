@@ -33,10 +33,19 @@ final class SchemaContractTest
         $position = -1;
 
         foreach ($columns as $column) {
-            $found = strpos($ddl, "\n    " . $column . ' ');
-            Assert::true($found !== false, sprintf('Column "%s" is missing from %s', $column, $file));
-            Assert::true((int) $found > $position, sprintf('Column "%s" is out of order in %s', $column, $file));
-            $position = (int) $found;
+            $declaration = "\n    " . $column . ' ';
+            Assert::true(
+                str_contains($ddl, $declaration),
+                sprintf('Column "%s" is missing from %s', $column, $file),
+            );
+
+            $found = strpos($ddl, $declaration);
+            // Narrows `int|false` for psalm. `$found !== false` would read the
+            // same but leaves the type alone, and the comparison below would
+            // then need a cast that rector removes as redundant.
+            Assert::int($found);
+            Assert::true($found > $position, sprintf('Column "%s" is out of order in %s', $column, $file));
+            $position = $found;
         }
     }
 
