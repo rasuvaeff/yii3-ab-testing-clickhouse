@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.0.0 — 2026-08-01
+
+### Removed
+
+- **Breaking.** The direct writers are gone: `ClickHouseExposureTracker`,
+  `ClickHouseConversionTracker`, `ClickHouseTrackingFlushMiddleware`,
+  `ClickHouseWriterSink`, `CompositeTrackingBatchSink`,
+  `TrackingBatchSinkInterface`, `TrackingObserverInterface` and
+  `NullTrackingObserver`. Under PHP-FPM the flush middleware issued a
+  synchronous 1–3 row INSERT per request, before the response was emitted, and
+  the buffer never filled because the worker did not outlive the request.
+  Events now arrive through the durable outbox exporter or a log-shipping
+  collector.
+- **Breaking.** `config/di.php` binds nothing. It used to bind `ExposureTracker`
+  and `ConversionTracker`, which made installing this package alongside the
+  outbox adapter a `yiisoft/config` `Duplicate key` error.
+
+### Added
+
+- Canonical analytics schema v2 (`ab_exposures_v2`, `ab_conversions_v2`) with
+  `event_id`, `occurred_at`, `decision_reason`, `assignment_source`,
+  `experiment_revision` and `dimensions`, on
+  `ReplacingMergeTree` ordered by `(experiment, event_id)`.
+- `AnalyticsSchemaV2` — the column contract producers check against, pinned to
+  the shipped DDL by a test.
+- `SchemaMigrations` — applies the shipped `.sql` without every consumer
+  hardcoding a `vendor/` path and its own placeholder map.
+
+### Changed
+
+- **Breaking.** Requires `rasuvaeff/yii3-ab-testing` `^2.0`.
+- The v1 tables are untouched and still created: they hold history that is not
+  migrated into v2, because their rows have no event identity and their `ts` is
+  ingestion time rather than event time.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

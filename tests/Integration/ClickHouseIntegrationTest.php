@@ -8,15 +8,10 @@ use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseDataReader;
-use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
 use Rasuvaeff\ClickHouseToolkit\ClickHouseQueryBuilder;
-use Rasuvaeff\Yii3AbTesting\Assignment;
-use Rasuvaeff\Yii3AbTesting\AssignmentContext;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
-use Rasuvaeff\Yii3AbTestingClickHouse\Tests\Support\FakePsrFactory;
-use Rasuvaeff\Yii3AbTestingClickHouse\Tests\Support\TrackingRequestHandler;
+use Rasuvaeff\Yii3AbTestingClickHouse\AnalyticsSchemaV2;
+use Rasuvaeff\Yii3AbTestingClickHouse\SchemaMigrations;
+use SimPod\ClickHouseClient\Client\ClickHouseClient;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Lifecycle\BeforeTest;
@@ -24,14 +19,19 @@ use Testo\Test;
 
 /**
  * End-to-end test against a real ClickHouse server. Skipped unless
- * CLICKHOUSE_HOST is set. Applies the shipped migrations, tracks events through
- * the buffered trackers, and reads them back.
+ * CLICKHOUSE_HOST is set. This package no longer writes events itself, so the
+ * only thing left to verify from here is the read side of the contract: apply
+ * the shipped schema v2 migrations, insert core's own golden fixture rows
+ * (the exact rows `EventSerializer` produces), and read them back unchanged.
  */
 #[Test]
 #[CoversNothing]
 final class ClickHouseIntegrationTest
 {
-    private ClickHouseClientFactory $clientFactory;
+    private const string GOLDEN_FIXTURE = __DIR__ . '/../../vendor/rasuvaeff/yii3-ab-testing/fixtures/golden-event-v2.json';
+
+    private ClickHouseClient $client;
+    private bool $skip = true;
 
     private function env(string $name, string $default): string
     {
@@ -48,135 +48,89 @@ final class ClickHouseIntegrationTest
             return;
         }
 
-        $this->clientFactory = new ClickHouseClientFactory(new ClickHouseConfig(
+        $this->skip = false;
+        $this->client = (new ClickHouseClientFactory(new ClickHouseConfig(
             host: $host,
             port: (int) $this->env('CLICKHOUSE_PORT', '8123'),
             database: $this->env('CLICKHOUSE_DB', 'default'),
             username: $this->env('CLICKHOUSE_USER', 'default'),
             password: $this->env('CLICKHOUSE_PASSWORD', ''),
-        ));
+        )))->create();
 
-        $client = $this->clientFactory->create();
-        foreach (['ab_exposures', 'ab_conversions', '_migrations'] as $table) {
-            $client->executeQuery('DROP TABLE IF EXISTS ' . $table);
+        foreach ([AnalyticsSchemaV2::EXPOSURES_TABLE, AnalyticsSchemaV2::CONVERSIONS_TABLE, '_migrations'] as $table) {
+            $this->client->executeQuery('DROP TABLE IF EXISTS ' . $table);
         }
 
-        // the shipped DDL is parameterised: without these the runner refuses to
-        // run rather than sending "{{exposures_table}}" to the server
-        (new ClickHouseMigrationRunner(
-            client: $client,
-            migrationsPath: dirname(__DIR__, 2) . '/migrations',
-            placeholders: [
-                'exposures_table' => 'ab_exposures',
-                'conversions_table' => 'ab_conversions',
-            ],
-        ))->run();
+        (new SchemaMigrations($this->client))->apply();
     }
 
-    public function flushesExposuresToClickHouse(): void
+    public function exposureRowSurvivesTheSchemaRoundTrip(): void
     {
-        if (!isset($this->clientFactory)) {
+        if ($this->skip) {
             return;
         }
 
-        $writer = new ClickHouseBatchWriter(
-            $this->clientFactory->create(),
-            'ab_exposures',
-            ClickHouseExposureTracker::COLUMNS,
-        );
-        $tracker = new ClickHouseExposureTracker(writer: $writer);
+        $fixture = $this->goldenRow('exposure');
 
-        $tracker->trackExposure(new Assignment(
-            experiment: 'checkout-button',
-            variant: 'green',
-            subjectId: 'user-1',
-            context: AssignmentContext::forEnvironment('production'),
-        ));
-        $tracker->trackExposure(new Assignment(experiment: 'checkout-button', variant: 'control', subjectId: 'user-2'));
-        $tracker->flush();
+        (new ClickHouseBatchWriter($this->client, AnalyticsSchemaV2::EXPOSURES_TABLE, AnalyticsSchemaV2::EXPOSURE_COLUMNS))
+            ->write([$fixture]);
 
-        Assert::same($this->countRows('ab_exposures'), 2);
+        $stored = $this->readOne(AnalyticsSchemaV2::EXPOSURES_TABLE, AnalyticsSchemaV2::EXPOSURE_COLUMNS);
+
+        foreach (AnalyticsSchemaV2::EXPOSURE_COLUMNS as $column) {
+            Assert::same((string) $stored[$column], (string) $fixture[$column], sprintf('Column "%s" did not round-trip', $column));
+        }
     }
 
-    public function flushesConversionsToClickHouse(): void
+    public function conversionRowSurvivesTheSchemaRoundTrip(): void
     {
-        if (!isset($this->clientFactory)) {
+        if ($this->skip) {
             return;
         }
 
-        $writer = new ClickHouseBatchWriter(
-            $this->clientFactory->create(),
-            'ab_conversions',
-            ClickHouseConversionTracker::COLUMNS,
-        );
-        $tracker = new ClickHouseConversionTracker(writer: $writer);
+        $fixture = $this->goldenRow('conversion');
 
-        $tracker->trackConversion(
-            new Assignment(experiment: 'checkout-button', variant: 'green', subjectId: 'user-1'),
-            goal: 'purchase',
-        );
-        $tracker->flush();
+        (new ClickHouseBatchWriter($this->client, AnalyticsSchemaV2::CONVERSIONS_TABLE, AnalyticsSchemaV2::CONVERSION_COLUMNS))
+            ->write([$fixture]);
 
-        Assert::same($this->countRows('ab_conversions'), 1);
-        Assert::same($this->firstGoal(), 'purchase');
-    }
+        $stored = $this->readOne(AnalyticsSchemaV2::CONVERSIONS_TABLE, AnalyticsSchemaV2::CONVERSION_COLUMNS);
 
-    public function outerMiddlewareFlushesEventsTrackedByDownstreamHandler(): void
-    {
-        if (!isset($this->clientFactory)) {
-            return;
+        foreach (AnalyticsSchemaV2::CONVERSION_COLUMNS as $column) {
+            Assert::same((string) $stored[$column], (string) $fixture[$column], sprintf('Column "%s" did not round-trip', $column));
         }
-
-        $exposureTracker = new ClickHouseExposureTracker(writer: new ClickHouseBatchWriter(
-            client: $this->clientFactory->create(),
-            table: 'ab_exposures',
-            columns: ClickHouseExposureTracker::COLUMNS,
-        ));
-        $conversionTracker = new ClickHouseConversionTracker(writer: new ClickHouseBatchWriter(
-            client: $this->clientFactory->create(),
-            table: 'ab_conversions',
-            columns: ClickHouseConversionTracker::COLUMNS,
-        ));
-        $response = FakePsrFactory::response();
-        $handler = new TrackingRequestHandler(
-            exposureTracker: $exposureTracker,
-            conversionTracker: $conversionTracker,
-            assignment: new Assignment(experiment: 'middleware-order', variant: 'control', subjectId: 'user-3'),
-            response: $response,
-        );
-        $middleware = new ClickHouseTrackingFlushMiddleware(
-            exposureTracker: $exposureTracker,
-            conversionTracker: $conversionTracker,
-        );
-
-        $actual = $middleware->process(FakePsrFactory::serverRequest(), $handler);
-
-        Assert::same($actual, $response);
-        Assert::same($this->countRows('ab_exposures'), 1);
-        Assert::same($this->countRows('ab_conversions'), 1);
-    }
-
-    private function countRows(string $table): int
-    {
-        return $this->reader(table: $table)->count();
-    }
-
-    private function firstGoal(): string
-    {
-        return (string) ($this->reader(table: 'ab_conversions', columns: ['goal'])->readOne()['goal'] ?? '');
     }
 
     /**
-     * @param list<string> $columns
+     * @return array<string, string>
      */
-    private function reader(string $table, array $columns = []): ClickHouseDataReader
+    private function goldenRow(string $kind): array
     {
-        return new ClickHouseDataReader(
-            client: $this->clientFactory->create(),
+        /** @var array<string, array{row: array<string, string>}> $fixture */
+        $fixture = (array) json_decode((string) file_get_contents(self::GOLDEN_FIXTURE), associative: true, flags: \JSON_THROW_ON_ERROR);
+        $row = $fixture[$kind]['row'];
+        unset($row['v']);
+
+        return $row;
+    }
+
+    /**
+     * @param non-empty-list<string> $columns
+     * @return array<string, mixed>
+     */
+    private function readOne(string $table, array $columns): array
+    {
+        $reader = new ClickHouseDataReader(
+            client: $this->client,
             table: $table,
             queryBuilder: ClickHouseQueryBuilder::create(allowedFields: $columns),
             mapper: static fn(array $row): array => $row,
             columns: $columns,
         );
+
+        /** @var array<string, mixed>|null $row */
+        $row = $reader->readOne();
+        Assert::notNull($row);
+
+        return $row;
     }
 }

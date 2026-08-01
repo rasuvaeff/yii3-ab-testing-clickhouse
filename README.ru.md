@@ -14,6 +14,12 @@
 
 > Используете AI-ассистента? В [llms.txt](llms.txt) — компактный API-справочник,
 > которым можно поделиться с моделью.
+> Проекты с Composer-плагином [llm/skills](https://github.com/roxblnfk/skills)
+> дополнительно получают agent skill этого пакета: он автоматически синкается в
+> `.agents/skills/` при установке.
+
+> Собираете свою комбинацию? Матрица интеграций семейства живёт в ядре:
+> `vendor/rasuvaeff/yii3-ab-testing/docs/integration.ru.md`.
 
 ## Требования
 
@@ -27,6 +33,8 @@
 ```bash
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
+
+Обновляетесь с 1.x? См. [UPGRADE.md](UPGRADE.md).
 
 С config-plugin из Yii3 пакет автоматически биндит `ExposureTracker`,
 `ConversionTracker` и `ClickHouseTrackingFlushMiddleware`. Не биндите интерфейсы
@@ -211,6 +219,8 @@ PSR-3 warnings продолжают работать независимо.
 | `ClickHouseConversionTracker` | Буферизует конверсии (с `goal`); `flush()` пакетно пишет в `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware, безопасно сбрасывающее оба трекера в конце запроса |
 | `TrackingObserverInterface` | Сигналы метрик/трассировки для buffered, written, failed и dropped событий |
+| `AnalyticsSchemaV2` | Контракт колонок, с которым сверяются производители; закреплён за поставляемой DDL |
+| `SchemaMigrations` | Применяет поставляемые `.sql` без хардкода пути в vendor |
 
 ## Безопасность
 

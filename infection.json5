@@ -7,11 +7,10 @@
         "text": "php://stderr",
         "summary": "build/infection-summary.log"
     },
-    // 96% is the honest ceiling: the only survivors are two equivalent mutants —
-    // `count($buffer) > $max` vs `>= $max` in the trackers' buffer-cap. At
-    // count == $max, `array_slice($buffer, -$max)` returns the same $max elements
-    // either way, so the two operators are behaviourally identical.
-    "minMsi": 96,
+    // The write path is gone, so the buffer-cap mutants that justified 96 are
+    // gone with it. Everything that remains is a constant or a small pure
+    // method, all of it reachable from unit tests.
+    "minMsi": 100,
     "testFramework": "testo",
     "testFrameworkOptions": "--suite=Unit",
     "mutators": {

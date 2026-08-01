@@ -13,6 +13,12 @@ ClickHouse exposure and conversion trackers for Yii3 A/B testing. Implements the
 buffering events in memory and writing them to ClickHouse in batches.
 
 > Using an AI coding assistant? [llms.txt](llms.txt) contains a compact API reference you can ingest in your prompt context.
+> Projects using the [llm/skills](https://github.com/roxblnfk/skills) Composer
+> plugin also get this package's agent skill synced into `.agents/skills/`
+> automatically on install.
+
+> Assembling a combination? The family's integration matrix lives in the core:
+> `vendor/rasuvaeff/yii3-ab-testing/docs/integration.md`.
 
 ## Requirements
 
@@ -26,6 +32,8 @@ buffering events in memory and writing them to ClickHouse in batches.
 ```bash
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
+
+Upgrading from 1.x? See [UPGRADE.md](UPGRADE.md).
 
 With Yii3 config-plugin this package binds `ExposureTracker`, `ConversionTracker`
 and `ClickHouseTrackingFlushMiddleware` automatically. Do not bind the tracker
@@ -205,6 +213,8 @@ or from `register_shutdown_function()`.
 | `ClickHouseConversionTracker` | Buffers conversions (with `goal`); `flush()` batch-writes to `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware that flushes both trackers safely at request end |
 | `TrackingObserverInterface` | Lifecycle metrics/tracing signals for buffered, written, failed, and dropped events |
+| `AnalyticsSchemaV2` | Column contract producers check against, pinned to the shipped DDL |
+| `SchemaMigrations` | Applies the shipped `.sql` without hardcoding a vendor path |
 
 ## Security
 

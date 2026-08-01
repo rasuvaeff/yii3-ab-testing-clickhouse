@@ -24,12 +24,10 @@
     },
     "require": {
         "php": "8.3 - 8.5",
-        "psr/http-message": "^2.0",
-        "psr/http-server-handler": "^1.0",
-        "psr/http-server-middleware": "^1.0",
         "psr/log": "^3.0",
         "rasuvaeff/clickhouse-toolkit": "^1.6",
-        "rasuvaeff/yii3-ab-testing": "^1.2"
+        "rasuvaeff/yii3-ab-testing": "^2.0",
+        "simpod/clickhouse-client": "^0.8"
     },
     "require-dev": {
         "ergebnis/composer-normalize": "^2.51",
@@ -73,6 +71,9 @@
         },
         "config-plugin-options": {
             "source-directory": "config"
+        },
+        "skills": {
+            "source": "resources/skills"
         }
     },
     "scripts": {

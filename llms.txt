@@ -1,5 +1,8 @@
 # yii3-ab-testing-clickhouse
 
+ClickHouse analytics schema for Yii3 A/B testing. Owns the tables and (from
+2.1) the reporting queries. Namespace `Rasuvaeff\Yii3AbTestingClickHouse\`.
+
 ## Install
 
 ```bash
@@ -8,70 +11,88 @@ composer require rasuvaeff/yii3-ab-testing-clickhouse
 
 ## Rules
 
-- Implements `Rasuvaeff\Yii3AbTesting\ExposureTracker` and `ConversionTracker`.
-- Buffers events in memory. At `autoFlushSize` (default 1000), `trackExposure()` / `trackConversion()` attempt a batched network write; other writes happen on explicit `flush()`.
-- One batched ClickHouse insert happens per `flush()`. `flush()` writes then clears the buffer; a failed write keeps the buffer.
-- Direct ClickHouse tracking is best effort, not durable. Inject a `LoggerInterface`, monitor delivery/drop warnings, and use the outbox adapter when durable delivery is required.
-- Bind `TrackingObserverInterface` for `buffered`, `written`, `flushFailed`, and `dropped` metric/trace signals. Implementations must not throw; the default is `NullTrackingObserver`.
-- `ClickHouseTrackingFlushMiddleware` is the recommended request-end integration: place it outside every middleware/handler that tracks events. It flushes both trackers in `finally` and swallows/logs flush failures.
-- Built on `rasuvaeff/clickhouse-toolkit` `ClickHouseBatchWriter`; trackers take a `ClickHouseWriterInterface`.
-- Booleans stored as `UInt8` (`0`/`1`); `environment` defaults to `''`; `ts` filled server-side by `DEFAULT now()`.
-- A tracker's `COLUMNS` constant must match its writer's columns and the table DDL.
-- Trackers implement `FlushableTracker` (core ^1.2); a failed auto-flush never throws and logs `Failed to auto-flush ClickHouse A/B testing tracker` with `event=flush_failed`. Events are kept up to 10 × autoFlushSize; dropping oldest events logs `Dropped ClickHouse A/B testing events after repeated flush failures` with `event=dropped` and `droppedEvents`. Buffered events are lost if the process exits.
-- Binds `ExposureTracker`, `ConversionTracker`, and `ClickHouseTrackingFlushMiddleware` in `config/di.php`. The app must register a `Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` and `Psr\Log\LoggerInterface`; the logger is passed to all three services.
-- Schema ships as `migrations/*.sql`, applied by the toolkit's `ClickHouseMigrationRunner`.
-- Opt-in schema-v1 TTL SQL lives in `retention/`; resolve table and positive `retention_days` placeholders explicitly. Package upgrades never enable retention.
-- Table names in that DDL are `{{exposures_table}}` / `{{conversions_table}}` placeholders (since 1.1), resolved by the runner BEFORE it hashes the file. Pass them via the runner's `placeholders:` argument, or via `'rasuvaeff/yii3-clickhouse-toolkit' => ['migrationPlaceholders' => [...]]` when wired through params — the writer's `exposuresTable`/`conversionsTable` params do NOT reach the DDL. Renaming after a migration was applied surfaces as a checksum divergence.
+- **This package does NOT write events.** The direct writers were removed in
+  2.0. Events arrive through `yii3-ab-testing-outbox` + a worker, or through a
+  log-shipping collector reading core's `Logger*` sinks.
+- Never insert from the request path. Under PHP-FPM that is one synchronous
+  insert of a few rows per request, inside the visitor's latency.
+- `config/di.php` binds nothing, so this package cannot collide with a tracker
+  backend on the `ExposureTracker`/`ConversionTracker` keys.
+- Column ORDER is part of the contract: an INSERT lists columns positionally, so
+  a producer that reorders them writes a variant into the subject column with no
+  error.
+- `ingested_at` must NOT be supplied by a producer — the table fills it with
+  `DEFAULT now()`. It records arrival; partitioning and dedup depend on
+  occurrence.
+- Read with `FINAL` (or `GROUP BY event_id` + `argMax`). ReplacingMergeTree
+  collapses on merge only, and delivery is at-least-once, so a plain count
+  over-counts after any retry.
+- Analysis population is `decision_reason = 'assigned'`; forced and both
+  fallback kinds are excluded.
+- v1 tables (`ab_exposures`, `ab_conversions`) are still created and are NOT
+  migrated into v2: their rows have no event identity and their `ts` is
+  ingestion time.
+- `retention/` is opt-in deployment SQL, never applied automatically.
 
-## Tables
+## API reference
 
-- `ab_exposures(experiment, variant, subject_id, is_forced, is_fallback, is_sticky, environment, ts)`
-- `ab_conversions(experiment, variant, subject_id, goal, is_forced, is_fallback, is_sticky, environment, ts)`
-
-Both `MergeTree`, partitioned by `toYYYYMM(ts)`, `ts DateTime DEFAULT now()`.
-
-The optional `secondarySink` constructor argument is an internal dual-write
-readiness hook. Package DI leaves it null; no schema-v2 DDL or route is enabled.
-
-## API
-
-### ClickHouseExposureTracker
+### AnalyticsSchemaV2
 
 ```php
-use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
+AnalyticsSchemaV2::EXPOSURES_TABLE;     // 'ab_exposures_v2'
+AnalyticsSchemaV2::CONVERSIONS_TABLE;   // 'ab_conversions_v2'
 
-$tracker = new ClickHouseExposureTracker(
-    writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
-    logger: $logger,
-);
+AnalyticsSchemaV2::EXPOSURE_COLUMNS;    // ordered insert columns
+// event_id, occurred_at, experiment, variant, subject_id, decision_reason,
+// assignment_source, experiment_revision, environment, dimensions
 
-$tracker->trackExposure($assignment); // buffered
-$tracker->flush();                    // one batched insert
+AnalyticsSchemaV2::CONVERSION_COLUMNS;  // the same plus goal, exposure_event_id
+AnalyticsSchemaV2::DEDUPLICATION_NOTE;  // why every read needs FINAL
 ```
 
-### ClickHouseConversionTracker
+### SchemaMigrations
 
 ```php
-use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
+use Rasuvaeff\Yii3AbTestingClickHouse\SchemaMigrations;
 
-$tracker = new ClickHouseConversionTracker(
-    writer: new ClickHouseBatchWriter($client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS),
-    logger: $logger,
-);
-
-$tracker->trackConversion($assignment, goal: 'purchase');
-$tracker->flush();
+$migrations = new SchemaMigrations($clickHouseClient, $logger);
+$migrations->apply();                        // default table names
+$migrations->apply('exp_v2', 'conv_v2');     // custom names
+$migrations->runner();                       // the underlying ClickHouseMigrationRunner
+SchemaMigrations::path();                    // directory of the shipped .sql
 ```
 
-### ClickHouseTrackingFlushMiddleware
+Applying is explicit, never automatic: creating analytics tables is a
+deployment step.
 
-```php
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
+### Schema v2
 
-return [
-    // Must wrap all middleware/handlers that can track an event.
-    ClickHouseTrackingFlushMiddleware::class,
-];
+```sql
+CREATE TABLE ab_exposures_v2
+(
+    event_id            String,
+    occurred_at         DateTime64(3, 'UTC'),
+    ingested_at         DateTime('UTC') DEFAULT now(),
+    experiment          LowCardinality(String),
+    variant             LowCardinality(String),
+    subject_id          String,
+    decision_reason     LowCardinality(String),
+    assignment_source   LowCardinality(String),
+    experiment_revision LowCardinality(String) DEFAULT '',
+    environment         LowCardinality(String) DEFAULT '',
+    dimensions          String DEFAULT '{}'
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(occurred_at)
+ORDER BY (experiment, event_id)
 ```
+
+`ab_conversions_v2` adds `goal` and `exposure_event_id`.
+
+`dimensions` is a JSON **string**, not a `Map`: the outbox exporter rejects
+nested payload fields, and both delivery paths must produce identical rows.
+Read it with `JSONExtract(dimensions, 'Map(String, String)')`.
+
+`occurred_at` drives the partition key, so a retried delivery must carry the
+original event time — otherwise it lands in a different partition and
+ReplacingMergeTree cannot collapse it.
