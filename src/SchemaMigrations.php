@@ -58,16 +58,35 @@ final readonly class SchemaMigrations
             client: $this->client,
             migrationsPath: self::path(),
             logger: $this->logger,
-            placeholders: [
-                // v1 tables are still created by 0001/0002: an installation
-                // upgrading from 1.x keeps reading its history, and the two
-                // generations never share a table name.
-                'exposures_table' => 'ab_exposures',
-                'conversions_table' => 'ab_conversions',
-                'exposures_table_v2' => $exposuresTable,
-                'conversions_table_v2' => $conversionsTable,
-            ],
+            placeholders: self::placeholders($exposuresTable, $conversionsTable),
         );
+    }
+
+    /**
+     * The `{{token}}` map the shipped DDL expects.
+     *
+     * Public because an application that runs its own migration pipeline still
+     * needs the exact tokens, and guessing them yields "unresolved placeholder"
+     * at deploy time rather than at build time.
+     *
+     * @param non-empty-string $exposuresTable
+     * @param non-empty-string $conversionsTable
+     *
+     * @return array<string, string>
+     */
+    public static function placeholders(
+        string $exposuresTable = AnalyticsSchemaV2::EXPOSURES_TABLE,
+        string $conversionsTable = AnalyticsSchemaV2::CONVERSIONS_TABLE,
+    ): array {
+        return [
+            // v1 tables are still created by 0001/0002: an installation
+            // upgrading from 1.x keeps reading its history, and the two
+            // generations never share a table name.
+            'exposures_table' => 'ab_exposures',
+            'conversions_table' => 'ab_conversions',
+            'exposures_table_v2' => $exposuresTable,
+            'conversions_table_v2' => $conversionsTable,
+        ];
     }
 
     /**

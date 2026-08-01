@@ -4,39 +4,46 @@ Guidance for AI agents working on this package. Read before changing code.
 
 ## What this is
 
-ClickHouse exposure and conversion trackers for Yii3 A/B testing. Implements
-`ExposureTracker` and `ConversionTracker` from `rasuvaeff/yii3-ab-testing` by
-buffering events in memory and writing them to ClickHouse in batches on an
-explicit `flush()`, built on `rasuvaeff/clickhouse-toolkit`
-(`ClickHouseBatchWriter`). This is the production analytics sink.
+**2.0 changed what this package is.** It used to be a tracker adapter that
+wrote events; it is now the owner of the analytics schema and, from 2.1, the
+reporting layer. If you are about to add a writer here, read `UPGRADE.md`
+first — the direct write path was removed on purpose, and re-adding it in any
+form (including "but with `async_insert`") reintroduces a synchronous insert in
+the visitor's latency.
+
+
+
+This package owns the ClickHouse analytics schema (`ab_exposures_v2`,
+`ab_conversions_v2`) and reads from it. It does **not** write events: they
+arrive through `yii3-ab-testing-outbox` plus a worker, or through a
+log-shipping collector reading core's `Logger*` sinks.
 Namespace: `Rasuvaeff\Yii3AbTestingClickHouse`.
 
-Public API: `ClickHouseExposureTracker`, `ClickHouseConversionTracker`,
-`ClickHouseTrackingFlushMiddleware`, `TrackingObserverInterface`. The trackers implement core's
-`FlushableTracker`, expose a `COLUMNS` constant, and have configurable
-`autoFlushSize`. Schema ships as ClickHouse `*.sql` files under `migrations/`,
-applied by the toolkit's `ClickHouseMigrationRunner`.
+Public API: `AnalyticsSchemaV2` (table names and ordered insert columns, pinned
+to the shipped DDL by `SchemaContractTest`) and `SchemaMigrations` (applies the
+shipped `.sql`). Reporting lands in 2.1.
 
-DI: `config/di.php` binds `ExposureTracker`, `ConversionTracker`, and the flush
-middleware class. The tracker factories pull a
-`Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` from the container and build a `ClickHouseBatchWriter` per table. The core binds neither tracker key; one
-source owns each (compose several sinks with the core `Composite*Tracker`).
-`config/di.php` is covered by `ConfigWiringTest`, not by cs/psalm/testo.
+DI: `config/di.php` binds **nothing**. In 1.x it bound `ExposureTracker` and
+`ConversionTracker`, which made installing this package next to the outbox
+adapter a `yiisoft/config` `Duplicate key` error; that conflict is gone with the
+writers.
 
 ## Golden rules
 
 1. **Verification is mandatory.** Never claim "done" without a fresh green
    `composer build`. "Should work" does not count.
 2. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
-3. **Tracking failures never break the request.** Trackers append to an in-memory
-   buffer; writes happen on `flush()` (middleware / shutdown) or amortized via
-   auto-flush at `autoFlushSize` multiples. A threshold event can therefore make
-   a network call, but a failed auto-flush or middleware flush must never throw
-   into the request. Keep events on failed writes, and log both delivery failures
-   and any events dropped at the buffer cap.
-4. **Preserve the public contract.** A tracker's `COLUMNS` constant must match
-   the columns of the `ClickHouseBatchWriter` it is given and the table DDL in
-   `migrations/`. Update README + tests with any API change.
+3. **`AnalyticsSchemaV2` and the DDL are one contract.** Producers check their
+   route columns against the constants, so the two drifting apart means a
+   producer writing confidently into a table that does not match. Column ORDER
+   is part of it: an INSERT lists columns positionally, so a reorder writes a
+   variant into the subject column with no error. `SchemaContractTest` pins
+   them; never make it optional.
+4. **Never add a writer back.** The direct path was removed because under
+   PHP-FPM it issued a synchronous insert of a few rows per request, before the
+   response was emitted. `async_insert` moves the batching server-side but keeps
+   the round-trip in the visitor's latency and leaves ~15 lines of package code.
+   See `UPGRADE.md`.
 
 ## Commands
 
@@ -82,26 +89,9 @@ make release-check
   placeholders was invisible to existing installations (both `sha1` values are
   unchanged for the default names). The same property means renaming after an
   apply is a divergence, not a silent second table.
-- Trackers depend on the toolkit's `ClickHouseWriterInterface` (injected), so unit
-  tests use in-memory writers and spies — no server needed for `composer build`.
-- `flush()` writes the buffer then clears it; an empty buffer writes nothing; a
-  failed explicit tracker write keeps the buffer (caller may retry).
-- Tracker auto-flush errors and cap-driven event loss are separate PSR-3 warning
-  signals. Keep their stable `event` values (`flush_failed` / `dropped`),
-  `trackerKind`, counts, and the original exception in structured context; DI
-  must pass the application logger to both trackers.
-- Observer signals are additive to logs: every append reports `buffered`, every
-  successful batch reports `written`, failures report `flushFailed`, and cap
-  loss reports `dropped`. Observers must not throw or use subject/experiment as
-  metric labels.
 - `retention/` is opt-in deployment SQL, never part of automatic migrations.
   Do not enable deletion on package upgrade. Schema v2 remains disabled; the
   internal secondary sink is only a dual-write readiness boundary.
-- Boolean flags are written as `UInt8` (`0`/`1`); `environment` defaults to `''`
-  when no `AssignmentContext` is present. `ts` is not written — the table fills it
-  with `DEFAULT now()`.
-- `ClickHouseTrackingFlushMiddleware` must wrap the handler in `try/finally` and
-  swallow/log tracker flush errors, otherwise analytics can break user traffic.
 - Integration test (`tests/Integration/ClickHouseIntegrationTest`) is skipped
   locally unless `CLICKHOUSE_HOST` is set; CI always supplies a live ClickHouse
   service. It applies `migrations/` via `ClickHouseMigrationRunner`. The app must
@@ -117,8 +107,18 @@ make release-check
     -e CLICKHOUSE_HOST=127.0.0.1 -e CLICKHOUSE_PORT=8124 -e CLICKHOUSE_PASSWORD=ch_test \
     composer:2 sh -lc 'vendor/bin/testo --suite=Integration'
   ```
-- Code: `declare(strict_types=1)`, `final class` (trackers hold a mutable buffer so
-  they are not `readonly`), `#[\Override]`, explicit types.
+- Code: `declare(strict_types=1)`, `final readonly class`, `#[\Override]`,
+  explicit types. Nothing here holds mutable state any more.
+- **Read with `FINAL`.** ReplacingMergeTree collapses on merge, not on insert,
+  and delivery is at-least-once, so a plain count over-counts after any retry.
+  `AnalyticsSchemaV2::DEDUPLICATION_NOTE` says so in code; R3's queries must
+  honour it.
+- **`ingested_at` is never supplied by a producer** — the table fills it with
+  `DEFAULT now()`. It records arrival, while partitioning and deduplication both
+  depend on occurrence (`occurred_at`, carried from the event).
+- **v1 tables are not migrated into v2 and never will be.** Their rows have no
+  event identity and their `ts` is ingestion time, so a backfill would produce
+  rows that look comparable to v2 and are not. They stay readable on their own.
 
 ## When you finish
 
