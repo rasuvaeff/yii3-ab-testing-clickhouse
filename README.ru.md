@@ -211,6 +211,8 @@ PSR-3 warnings продолжают работать независимо.
 | `ClickHouseConversionTracker` | Буферизует конверсии (с `goal`); `flush()` пакетно пишет в `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware, безопасно сбрасывающее оба трекера в конце запроса |
 | `TrackingObserverInterface` | Сигналы метрик/трассировки для buffered, written, failed и dropped событий |
+| `AnalyticsSchemaV2` | Контракт колонок, с которым сверяются производители; закреплён за поставляемой DDL |
+| `SchemaMigrations` | Применяет поставляемые `.sql` без хардкода пути в vendor |
 
 ## Безопасность
 

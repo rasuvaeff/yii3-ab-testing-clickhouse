@@ -205,6 +205,8 @@ or from `register_shutdown_function()`.
 | `ClickHouseConversionTracker` | Buffers conversions (with `goal`); `flush()` batch-writes to `ab_conversions` |
 | `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware that flushes both trackers safely at request end |
 | `TrackingObserverInterface` | Lifecycle metrics/tracing signals for buffered, written, failed, and dropped events |
+| `AnalyticsSchemaV2` | Column contract producers check against, pinned to the shipped DDL |
+| `SchemaMigrations` | Applies the shipped `.sql` without hardcoding a vendor path |
 
 ## Security
 
