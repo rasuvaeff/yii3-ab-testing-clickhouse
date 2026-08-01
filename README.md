@@ -33,6 +33,8 @@ buffering events in memory and writing them to ClickHouse in batches.
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
 
+Upgrading from 1.x? See [UPGRADE.md](UPGRADE.md).
+
 With Yii3 config-plugin this package binds `ExposureTracker`, `ConversionTracker`
 and `ClickHouseTrackingFlushMiddleware` automatically. Do not bind the tracker
 interfaces from another adapter at the same time or `yiisoft/config` reports a

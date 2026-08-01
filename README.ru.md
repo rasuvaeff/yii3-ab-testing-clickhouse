@@ -34,6 +34,8 @@
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
 
+Обновляетесь с 1.x? См. [UPGRADE.md](UPGRADE.md).
+
 С config-plugin из Yii3 пакет автоматически биндит `ExposureTracker`,
 `ConversionTracker` и `ClickHouseTrackingFlushMiddleware`. Не биндите интерфейсы
 трекеров из другого адаптера одновременно — иначе `yiisoft/config` сообщит об
