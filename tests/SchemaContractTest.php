@@ -67,7 +67,7 @@ final class SchemaContractTest
         $ddl = (string) file_get_contents(self::MIGRATIONS . $file);
 
         Assert::string($ddl)->contains('ingested_at');
-        Assert::false(\in_array('ingested_at', $columns, true));
+        Assert::false(\in_array('ingested_at', $columns, strict: true));
     }
 
     /**
@@ -82,7 +82,7 @@ final class SchemaContractTest
         Assert::string($ddl)->contains('ReplacingMergeTree');
         Assert::string($ddl)->contains('PARTITION BY toYYYYMM(occurred_at)');
         Assert::string($ddl)->contains('ORDER BY (experiment, event_id)');
-        Assert::true(\in_array('event_id', $columns, true));
+        Assert::true(\in_array('event_id', $columns, strict: true));
     }
 
     public function conversionCarriesEverythingAnExposureDoes(): void
