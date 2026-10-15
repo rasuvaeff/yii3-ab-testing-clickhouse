@@ -8,9 +8,9 @@
 [![License](https://img.shields.io/packagist/l/rasuvaeff/yii3-ab-testing-clickhouse.svg)](LICENSE.md)
 [English version](README.md)
 
-Трекеры показов и конверсий в ClickHouse для A/B-тестирования в Yii3. Реализует
-интерфейсы `ExposureTracker` и `ConversionTracker` из `rasuvaeff/yii3-ab-testing`:
-события буферизуются в памяти и записываются в ClickHouse пакетами.
+Аналитическая схема ClickHouse для A/B-тестирования в Yii3. Пакет владеет
+таблицами схемы v2, в которые пишут оба пути доставки, поставляет их миграции и
+даёт продюсерам контракт колонок для самопроверки. События он **не** пишет.
 
 > Используете AI-ассистента? В [llms.txt](llms.txt) — компактный API-справочник,
 > которым можно поделиться с моделью.
@@ -18,15 +18,17 @@
 > дополнительно получают agent skill этого пакета: он автоматически синкается в
 > `.agents/skills/` при установке.
 
-> Собираете свою комбинацию? Матрица интеграций семейства живёт в ядре:
-> `vendor/rasuvaeff/yii3-ab-testing/docs/integration.ru.md`.
+> **Сайт документации:** [rasuvaeff.github.io/yii3-ab-testing](https://rasuvaeff.github.io/yii3-ab-testing/)
+> охватывает всё семейство, включая
+> [матрицу интеграций](https://rasuvaeff.github.io/yii3-ab-testing/integration)
+> для сборки своей комбинации (на английском).
 
 ## Требования
 
 - PHP 8.3+
-- `rasuvaeff/yii3-ab-testing` ^1.2
-- `rasuvaeff/clickhouse-toolkit` ^1.6
-- PSR-18 HTTP-клиент (например `guzzlehttp/guzzle`) для подключения к ClickHouse
+- `rasuvaeff/yii3-ab-testing` ^2.0
+- `rasuvaeff/clickhouse-toolkit` ^1.6 и `simpod/clickhouse-client` ^0.8
+  (с PSR-18 HTTP-клиентом, например `guzzlehttp/guzzle`) — чтобы применить схему
 
 ## Установка
 
@@ -34,219 +36,167 @@
 composer require rasuvaeff/yii3-ab-testing-clickhouse
 ```
 
-Обновляетесь с 1.x? См. [UPGRADE.md](UPGRADE.md).
+Обновляетесь с 1.x? См. [UPGRADE.md](UPGRADE.md) — прямых writer'ов больше нет.
 
-С config-plugin из Yii3 пакет автоматически биндит `ExposureTracker`,
-`ConversionTracker` и `ClickHouseTrackingFlushMiddleware`. Не биндите интерфейсы
-трекеров из другого адаптера одновременно — иначе `yiisoft/config` сообщит об
-ошибке `Duplicate key`. Чтобы отправлять события в несколько приёмников,
-скомпонуйте их через ядерные `CompositeExposureTracker` /
-`CompositeConversionTracker`.
+## Как сюда попадают события
 
-DI-фабрика достаёт из контейнера
-`Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory` и
-`Psr\Log\LoggerInterface`. Фабрика создаёт пакетных писателей, а logger получает
-предупреждения о доставке. Зарегистрируйте обе зависимости в приложении (в Yii
-logger обычно уже зарегистрирован):
+Трекера в пакете нет. События приходят одним из двух путей, и оба дают
+одинаковые строки:
 
-```php
-use Rasuvaeff\ClickHouseToolkit\ClickHouseClientFactory;
-use Rasuvaeff\ClickHouseToolkit\ClickHouseConfig;
+| Путь | Установить | Компромисс |
+|---|---|---|
+| Durable | `yii3-ab-testing-outbox` + `yii3-outbox-db` + воркер (`outbox:clickhouse:export`) | переживает недоступность аналитики; нужны таблица и работающий воркер |
+| Log shipping | `LoggerExposureTracker` / `LoggerConversionTracker` из ядра + Vector / Fluent Bit | без воркера и без сетевого вызова в запросе; доставка — забота коллектора |
 
-return [
-    ClickHouseClientFactory::class => static fn (): ClickHouseClientFactory => new ClickHouseClientFactory(
-        new ClickHouseConfig(host: getenv('CLICKHOUSE_HOST') ?: '127.0.0.1', /* ... */),
-    ),
-];
+Никогда не вставляйте строки из пути запроса. Под PHP-FPM это синхронный INSERT
+нескольких строк на каждый запрос внутри латентности посетителя — именно
+поэтому прямой writer удалён в 2.0.
+
+`config/di.php` ничего не биндит, поэтому установка рядом с любым
+адаптером-трекером не может вызвать ошибку `Duplicate key` в `yiisoft/config`.
+
+## Схема БД
+
+| Таблица | Константа | Строки |
+|---|---|---|
+| `ab_exposures_v2` | `AnalyticsSchemaV2::EXPOSURES_TABLE` | по одной на событие показа |
+| `ab_conversions_v2` | `AnalyticsSchemaV2::CONVERSIONS_TABLE` | по одной на конверсию, плюс `goal` и `exposure_event_id` |
+
+```sql
+CREATE TABLE ab_exposures_v2
+(
+    event_id            String,
+    occurred_at         DateTime64(3, 'UTC'),
+    ingested_at         DateTime('UTC') DEFAULT now(),
+    experiment          LowCardinality(String),
+    variant             LowCardinality(String),
+    subject_id          String,
+    decision_reason     LowCardinality(String),
+    assignment_source   LowCardinality(String),
+    experiment_revision LowCardinality(String) DEFAULT '',
+    environment         LowCardinality(String) DEFAULT '',
+    dimensions          String DEFAULT '{}'
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(occurred_at)
+ORDER BY (experiment, event_id)
 ```
 
-## Схема базы данных
+- `event_id` выпускается ядром один раз и служит ключом дедупликации всего
+  конвейера: повторная доставка после неопределённого исхода несёт то же
+  значение.
+- `occurred_at` — время события, а не доставки. От него считается ключ
+  партиции, поэтому ретрай через границу месяца попадает в ту же партицию и
+  схлопывается.
+- `ingested_at` заполняет сама таблица; продюсер его **не** передаёт.
+- `dimensions` — JSON-**строка**, а не `Map`: outbox-экспортёр отвергает
+  вложенные поля payload, а оба пути доставки обязаны давать одинаковые строки.
+  Читать через `JSONExtract(dimensions, 'Map(String, String)')`.
 
-DDL для двух таблиц событий поставляется под `migrations/` как ClickHouse-файлы
-`*.sql` и применяется через `ClickHouseMigrationRunner` из toolkit'а. Имена
-таблиц — плейсхолдеры `{{exposures_table}}` / `{{conversions_table}}`, раннер
-подставляет их до вычисления контрольной суммы и выполнения:
-
-```php
-use Rasuvaeff\ClickHouseToolkit\ClickHouseMigrationRunner;
-
-(new ClickHouseMigrationRunner(
-    client: $clickHouseClient,
-    migrationsPath: __DIR__ . '/vendor/rasuvaeff/yii3-ab-testing-clickhouse/migrations',
-    placeholders: [
-        'exposures_table' => 'ab_exposures',
-        'conversions_table' => 'ab_conversions',
-    ],
-))->run();
-```
-
-При проводке через `rasuvaeff/yii3-clickhouse-toolkit` (v1.1+) те же значения
-приходят из params. Имя используется дважды — writer'ом и миграцией — поэтому
-задавайте его один раз:
+### Контракт колонок
 
 ```php
-// config/common/params.php
-$exposures = 'ab_exposures';
-$conversions = 'ab_conversions';
+use Rasuvaeff\Yii3AbTestingClickHouse\AnalyticsSchemaV2;
 
-return [
-    'rasuvaeff/yii3-ab-testing-clickhouse' => [
-        'exposuresTable' => $exposures,
-        'conversionsTable' => $conversions,
-    ],
-    'rasuvaeff/yii3-clickhouse-toolkit' => [
-        'migrationPlaceholders' => [
-            'exposures_table' => $exposures,
-            'conversions_table' => $conversions,
-        ],
-    ],
-];
+AnalyticsSchemaV2::EXPOSURE_COLUMNS;   // колонки INSERT, по порядку
+AnalyticsSchemaV2::CONVERSION_COLUMNS; // те же плюс goal и exposure_event_id
 ```
 
-Два блока params, а не один, потому что `yiisoft/config` разрешает определять
-конкретный ключ ровно одному vendor-пакету: этот пакет не может дописать
-`migrationPlaceholders` в конфигурацию toolkit'а без ошибки `Duplicate key`.
+**Порядок** колонок — часть контракта: INSERT перечисляет колонки по позиции, и
+продюсер, переставивший их, запишет вариант в колонку субъекта без всякой
+ошибки. `yii3-ab-testing-outbox` маршрутизирует в эти константы, а не
+дублирует их, а тест привязывает их к поставляемому DDL.
 
-До v1.1 params переименовывали только **writer**, а поставляемый DDL всегда
-создавал `ab_exposures` / `ab_conversions` — то есть настройка давала writer,
-пишущий в таблицу, которую никто не создавал.
+### Применение миграций
 
-**Переименование после первого применения.** Контрольная сумма раннера считается
-по подставленному SQL, поэтому смена имени после применения миграции
-сообщается как расхождение, а не создаёт молча вторую таблицу. Создайте новую
-таблицу сами (DDL лежит в `migrations/`) либо удалите строку этого файла из
-таблицы `_migrations` и перезапустите.
+```php
+use Rasuvaeff\Yii3AbTestingClickHouse\SchemaMigrations;
 
-| Таблица | Колонки |
-|---|---|
-| `ab_exposures` | `experiment, variant, subject_id, is_forced, is_fallback, is_sticky, environment, ts` |
-| `ab_conversions` | `experiment, variant, subject_id, goal, is_forced, is_fallback, is_sticky, environment, ts` |
+$applied = (new SchemaMigrations(client: $clickHouseClient, logger: $logger))->apply();
+// список применённых миграций; повторный вызов вернёт []
+```
 
-Обе таблицы — `MergeTree` с партицированием по `toYYYYMM(ts)`; `ts` по умолчанию
-равно `now()`.
+`apply()` прогоняет поставляемые `migrations/*.sql` через
+`ClickHouseMigrationRunner` из `clickhouse-toolkit`, находя их от самого пакета,
+а не по захардкоженному пути в `vendor/`. Применение явное, никогда не
+автоматическое: создание аналитических таблиц — шаг деплоя.
+
+Свои имена таблиц — `apply('exp_v2', 'conv_v2')`. Приложение со своим
+конвейером миграций (например, `rasuvaeff/yii3-clickhouse-toolkit`) берёт
+каталог и точную карту плейсхолдеров у пакета:
+
+```php
+use Rasuvaeff\Yii3AbTestingClickHouse\SchemaMigrations;
+
+SchemaMigrations::path();          // каталог поставляемых .sql
+SchemaMigrations::placeholders();  // ['exposures_table' => …, 'exposures_table_v2' => …, …]
+```
+
+**Переименование после первого применения.** Чексумма runner'а покрывает
+итоговый SQL, поэтому смена имени после применения миграции сообщается как
+расхождение, а не создаёт молча вторую таблицу.
+
+### Таблицы схемы v1
+
+Таблицы v1 `ab_exposures` / `ab_conversions` по-прежнему создаются, чтобы
+установка, обновлённая с 1.x, продолжала читать свою историю. В v2 они **не**
+мигрируются и построчно несравнимы: у строк v1 нет идентичности события, а их
+`ts` — время приёма.
 
 ### Retention
 
-Opt-in TTL-шаблоны для schema v1 лежат в `retention/`. Они намеренно не являются
-миграциями: установка или обновление пакета не должны автоматически начинать
-удаление аналитических данных. Подставьте `{{exposures_table}}` /
-`{{conversions_table}}` и положительное целое `{{retention_days}}`, проверьте SQL
-и примените его своим deployment-процессом. Парные `disable_*_ttl.sql` удаляют
-политику, не удаляя уже сохранённые строки. Смена срока выполняется обычным
-`MODIFY TTL`; ClickHouse применяет её асинхронно.
+Opt-in TTL-шаблоны лежат в `retention/`. Это намеренно не миграции: установка
+или обновление пакета никогда не должны начинать удалять аналитические данные.
+Поставляемые шаблоны рассчитаны на таблицы **v1** (`{{exposures_table}}` /
+`{{conversions_table}}`, колонка `ts`): подставьте их и положительное целое
+`{{retention_days}}`, проверьте SQL и примените через свой процесс деплоя.
+Парные шаблоны `disable_*_ttl.sql` снимают политику, не удаляя строки. Для
+таблиц v2 напишите аналогичный `MODIFY TTL` по `occurred_at`.
 
-## Использование
+## Чтение результатов
 
-```php
-use Rasuvaeff\ClickHouseToolkit\ClickHouseBatchWriter;
-use Rasuvaeff\Yii3AbTesting\AbTesting;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseConversionTracker;
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseExposureTracker;
-
-$exposure = new ClickHouseExposureTracker(
-    writer: new ClickHouseBatchWriter($client, 'ab_exposures', ClickHouseExposureTracker::COLUMNS),
-    logger: $logger,
-);
-$conversion = new ClickHouseConversionTracker(
-    writer: new ClickHouseBatchWriter($client, 'ab_conversions', ClickHouseConversionTracker::COLUMNS),
-    logger: $logger,
-);
-
-$ab = new AbTesting(
-    provider: $provider,
-    strategy: $strategy,
-    exposureTracker: $exposure,
-    conversionTracker: $conversion,
-);
-
-$assignment = $ab->assign(experiment: 'checkout-button', subjectId: (string) $userId);
-$ab->trackExposure($assignment);            // buffered, not sent yet
-$ab->trackConversion($assignment, goal: 'purchase');
+```sql
+SELECT variant, uniqExact(subject_id) AS subjects
+FROM ab_exposures_v2 FINAL
+WHERE experiment = 'checkout_button'
+  AND decision_reason = 'assigned'
+GROUP BY variant
 ```
 
-### Сброс в конце запроса
+- **`FINAL`** (или `GROUP BY event_id` с `argMax`). `ReplacingMergeTree`
+  схлопывает дубликаты только при слиянии, а доставка at-least-once, так что
+  простой подсчёт после любого ретрая завышен. Правило зафиксировано в
+  `AnalyticsSchemaV2::DEDUPLICATION_NOTE`.
+- **`decision_reason = 'assigned'`**. Принудительный (QA) трафик и оба вида
+  fallback записываются, но участием в эксперименте не являются.
 
-Строки накапливаются в in-memory буфере. При достижении `autoFlushSize` (по
-умолчанию 1000) вызов `trackExposure()` или `trackConversion()` пытается
-выполнить одну пакетную сетевую запись; в остальных случаях запись происходит
-на `flush()`. Поэтому прямой ClickHouse-трекинг — best-effort приёмник, а не
-надёжная очередь. Пакет содержит `ClickHouseTrackingFlushMiddleware` для
-рекомендуемого сброса в конце запроса:
-
-```php
-use Rasuvaeff\Yii3AbTestingClickHouse\ClickHouseTrackingFlushMiddleware;
-
-return [
-    // Должно оборачивать все middleware/handler'ы, способные записать событие.
-    ClickHouseTrackingFlushMiddleware::class,
-];
-```
-
-Middleware оборачивает downstream-обработчик в `try/finally`, сбрасывает оба
-трекера после запроса и проглатывает/логирует ошибки сброса, чтобы аналитика
-никогда не ломала ответ пользователю. Зарегистрируйте его снаружи (раньше всех
-таких обработчиков, если первый элемент pipeline является внешним) относительно
-всех middleware и кода приложения, способных записать событие.
-
-Неудачный auto-flush сохраняет события для повтора и пишет warning
-`Failed to auto-flush ClickHouse A/B testing tracker`. Чтобы ограничить память
-worker'а, буфер ограничен `10 * autoFlushSize`; при удалении старейших событий
-пишется `Dropped ClickHouse A/B testing events after repeated flush failures` с
-числом `droppedEvents`. Их структурированные значения `event` — `flush_failed`
-и `dropped`. Отслеживайте оба warning. События, оставшиеся в буфере к моменту
-завершения процесса, теряются.
-
-Для метрик и трассировки реализуйте `TrackingObserverInterface` и привяжите его
-в DI. Он сообщает `buffered`, `written`, `flushFailed` и `dropped` с типом
-tracker'а и счётчиками событий. Метки должны быть низкокардинальными, observer не
-должен бросать исключения. По умолчанию используется `NullTrackingObserver`;
-PSR-3 warnings продолжают работать независимо.
-
-Буфер пишет через внутренний `TrackingBatchSinkInterface`. Tracker'ы принимают
-необязательный `secondarySink` для контролируемого dual-write; пакетный DI его
-не настраивает, schema v2 не поставляется и не включается. Если secondary write
-упал после успешного primary write, весь сохранённый batch будет повторён,
-поэтому каждый target обязан выдерживать at-least-once delivery.
-
-Если вы не используете PSR-15 pipeline, вызывайте `flush()` сами — один раз в
-конце запроса или из `register_shutdown_function()`.
-
-## API reference
+## Справочник API
 
 | Класс | Описание |
 |---|---|
-| `ClickHouseExposureTracker` | Буферизует показы; `flush()` пакетно пишет в `ab_exposures` |
-| `ClickHouseConversionTracker` | Буферизует конверсии (с `goal`); `flush()` пакетно пишет в `ab_conversions` |
-| `ClickHouseTrackingFlushMiddleware` | PSR-15 middleware, безопасно сбрасывающее оба трекера в конце запроса |
-| `TrackingObserverInterface` | Сигналы метрик/трассировки для buffered, written, failed и dropped событий |
-| `AnalyticsSchemaV2` | Контракт колонок, с которым сверяются производители; закреплён за поставляемой DDL |
-| `SchemaMigrations` | Применяет поставляемые `.sql` без хардкода пути в vendor |
+| `AnalyticsSchemaV2` | Имена таблиц и упорядоченные колонки INSERT схемы v2 — контракт для продюсеров, привязанный к поставляемому DDL |
+| `SchemaMigrations` | Применяет поставляемые `.sql`; отдаёт их путь и карту плейсхолдеров |
 
 ## Безопасность
 
-- Учётные данные подключения передаются через `ClickHouseClientFactory` из
-  toolkit'а (заголовки / конфиг из env), а не в URL. Toolkit валидирует
-  идентификаторы таблиц и колонок и использует параметризованные вставки.
-- `subject_id` хранится как есть и может содержать персональные данные.
-  Настройте TTL / партиционную политику удержания в соответствии с вашей
-  privacy-политикой.
-- Ошибки auto-flush и middleware flush намеренно проглатываются. Отслеживайте
-  предупреждения об ошибках доставки и отброшенных событиях; если нужна
-  гарантированная доставка, используйте outbox-адаптер.
+- Учётные данные передаются через конфигурацию клиента `clickhouse-toolkit`
+  (заголовки / env), никогда не в URL.
+- `subject_id` хранится как есть и может быть персональными данными. Настройте
+  retention под свои обязательства по приватности.
 
 ## Примеры
 
-См. [examples/](examples/) — запускаемый скрипт (сервер не требуется,
-используется in-memory writer).
+В [examples/](examples/) — исполняемый скрипт (сервер не нужен), который печатает
+контракт колонок и форму запроса для чтения.
 
 ## Разработка
 
 ```bash
-composer build          # full gate: validate + normalize + cs + psalm + test
-composer cs:fix         # auto-fix code style
-composer psalm          # static analysis
-composer test           # run unit tests (integration tests skipped without CLICKHOUSE_HOST)
-vendor/bin/testo --suite=Integration # требует CLICKHOUSE_HOST; в CI запускается с живым ClickHouse
+composer build          # полный gate: validate + normalize + cs + psalm + test
+composer cs:fix         # автоисправление стиля
+composer psalm          # статический анализ
+composer test           # unit-тесты (интеграционные пропускаются без CLICKHOUSE_HOST)
+vendor/bin/testo --suite=Integration # нужен CLICKHOUSE_HOST; в CI гоняется вживую
 ```
 
 ## Лицензия

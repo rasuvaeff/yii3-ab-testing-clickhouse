@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 2.0.1 — 2026-10-15
+
+### Documentation
+
+- Rewrite `README.md` / `README.ru.md` for 2.x: they still documented the
+  trackers, the flush middleware and the schema v1 tables removed in 2.0.0.
+  The READMEs now describe the schema v2 tables, `AnalyticsSchemaV2`,
+  `SchemaMigrations` and the two delivery paths, and link the family
+  documentation site instead of a `vendor/` path that `export-ignore` removes.
 
 ### Changed
 
