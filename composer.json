@@ -1,6 +1,6 @@
 {
     "name": "rasuvaeff/yii3-ab-testing-clickhouse",
-    "description": "ClickHouse exposure and conversion trackers for Yii3 A/B testing",
+    "description": "ClickHouse analytics schema and migrations for Yii3 A/B testing",
     "license": "BSD-3-Clause",
     "type": "library",
     "keywords": [
