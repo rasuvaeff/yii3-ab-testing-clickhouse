@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `composer.json` description now matches the package: the ClickHouse analytics schema and its migrations, not event trackers (#20).
 - Mutation testing now counts code the tests execute but do not name in `#[Covers]` (`infection --threads=max --with-uncovered`); the `PublicVisibility` mutator is off and default values in parameter lists are ignored. No `src/` changes.
 
 ## 2.0.1 — 2026-10-15
